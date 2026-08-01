@@ -14,6 +14,7 @@ import {
   requestOpenRouterGemini31Speech,
   sanitizeNarratorDirection
 } from "./server/geminiContinuity.js";
+import { openRouterErrorDetails, requestOpenRouterSpeech } from "./server/openRouterSpeech.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,6 +115,12 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/health") {
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === "/favicon.ico") {
+      res.writeHead(204, { "Cache-Control": "public, max-age=86400" });
+      res.end();
       return;
     }
 
@@ -221,9 +228,11 @@ server.on("upgrade", (req, socket, head) => {
   client.on("error", () => session.cancel("Client socket errored."));
 });
 
-server.listen(PORT, () => {
-  console.log(`bigTTS is running at http://localhost:${PORT}`);
-});
+if (path.resolve(process.argv[1] || "") === __filename) {
+  server.listen(PORT, () => {
+    console.log(`bigTTS is running at http://localhost:${PORT}`);
+  });
+}
 
 async function handleOpenRouterModels(req, res) {
   if (req.method !== "POST") {
@@ -953,10 +962,13 @@ function sendGoogleOAuthResult(res, status, { title, message, success }) {
 </html>`);
 }
 
-function createNarrationSession(client) {
+export function createNarrationSession(client) {
   const state = {
     active: false,
     cancelled: false,
+    pauseRequested: false,
+    paused: false,
+    recoverableError: null,
     upstream: null,
     currentRequest: null,
     apiKey: "",
@@ -978,6 +990,26 @@ function createNarrationSession(client) {
 
       if (message.type === "telemetry") {
         // Playback telemetry is display-only; generation should keep moving.
+        return;
+      }
+
+      if (message.type === "pause") {
+        requestPause();
+        return;
+      }
+
+      if (message.type === "resume") {
+        resume().catch((error) => fail(error));
+        return;
+      }
+
+      if (message.type === "retrySegment") {
+        retryFailedSegment().catch((error) => fail(error));
+        return;
+      }
+
+      if (message.type === "skipSegment") {
+        skipFailedSegment().catch((error) => fail(error));
         return;
       }
 
@@ -1011,6 +1043,9 @@ function createNarrationSession(client) {
 
     state.active = true;
     state.cancelled = false;
+    state.pauseRequested = false;
+    state.paused = false;
+    state.recoverableError = null;
     state.apiKey = apiKey;
     state.options = options;
     state.segmentIndex = 0;
@@ -1077,15 +1112,90 @@ function createNarrationSession(client) {
   }
 
   async function pumpNextSegment() {
-    if (!state.active || state.cancelled || state.waitingForAudioDone) return;
+    if (!state.active || state.cancelled || state.waitingForAudioDone || state.recoverableError) return;
 
     if (state.segmentIndex >= state.segments.length) {
       finish();
       return;
     }
 
+    if (state.paused) return;
+    if (state.pauseRequested) {
+      enterPaused();
+      return;
+    }
+
     await connectUpstream();
+    if (!state.active || state.cancelled || state.paused) return;
+    if (state.pauseRequested) {
+      enterPaused();
+      return;
+    }
     await sendSegment(state.segments[state.segmentIndex]);
+  }
+
+  function requestPause() {
+    if (!state.active || state.cancelled || state.paused || state.pauseRequested) return;
+    state.pauseRequested = true;
+    if (state.waitingForAudioDone) {
+      sendJsonWs(client, {
+        type: "pausePending",
+        currentSegment: state.segmentIndex + 1,
+        totalSegments: state.segments.length
+      });
+      return;
+    }
+    enterPaused();
+  }
+
+  function enterPaused() {
+    if (!state.active || state.cancelled || state.waitingForAudioDone || state.segmentIndex >= state.segments.length) return;
+    state.pauseRequested = false;
+    state.paused = true;
+    closeUpstream();
+    sendJsonWs(client, {
+      type: "paused",
+      completedSegments: state.segmentIndex,
+      totalSegments: state.segments.length
+    });
+  }
+
+  async function resume() {
+    if (!state.active || state.cancelled) return;
+    if (state.pauseRequested && !state.paused) {
+      state.pauseRequested = false;
+      sendJsonWs(client, {
+        type: "resumed",
+        nextSegment: state.segmentIndex + 1,
+        totalSegments: state.segments.length
+      });
+      return;
+    }
+    if (!state.paused) return;
+    state.paused = false;
+    sendJsonWs(client, {
+      type: "resumed",
+      nextSegment: state.segmentIndex + 1,
+      totalSegments: state.segments.length
+    });
+    await pumpNextSegment();
+  }
+
+  async function retryFailedSegment() {
+    if (!state.active || state.cancelled || !state.recoverableError || state.waitingForAudioDone) return;
+    const index = state.segmentIndex + 1;
+    state.recoverableError = null;
+    sendJsonWs(client, { type: "segmentRetrying", index, totalSegments: state.segments.length });
+    await sendSegment(state.segments[state.segmentIndex]);
+  }
+
+  async function skipFailedSegment() {
+    if (!state.active || state.cancelled || !state.recoverableError || state.waitingForAudioDone) return;
+    const index = state.segmentIndex + 1;
+    state.recoverableError = null;
+    state.segmentIndex += 1;
+    sendJsonWs(client, { type: "segmentSkipped", index, totalSegments: state.segments.length });
+    await pumpNextSegment();
   }
 
   async function sendSegment(segment) {
@@ -1381,6 +1491,9 @@ function createNarrationSession(client) {
     if (!state.active) return;
 
     state.active = false;
+    state.pauseRequested = false;
+    state.paused = false;
+    state.recoverableError = null;
     sendJsonWs(client, {
       type: "complete",
       totalBytes: state.totalBytes,
@@ -1395,6 +1508,9 @@ function createNarrationSession(client) {
 
     state.cancelled = true;
     state.active = false;
+    state.pauseRequested = false;
+    state.paused = false;
+    state.recoverableError = null;
 
     if (state.currentRequest) {
       state.currentRequest.abort();
@@ -1416,7 +1532,28 @@ function createNarrationSession(client) {
   function fail(error) {
     if (state.cancelled) return;
 
+    if (state.active
+      && state.options.provider === "openrouter"
+      && state.waitingForAudioDone
+      && state.segmentIndex < state.segments.length) {
+      state.waitingForAudioDone = false;
+      state.pauseRequested = false;
+      state.paused = false;
+      state.recoverableError = error;
+      sendJsonWs(client, {
+        type: "segmentFailed",
+        index: state.segmentIndex + 1,
+        totalSegments: state.segments.length,
+        message: error.message || String(error),
+        details: openRouterErrorDetails(error)
+      });
+      return;
+    }
+
     state.active = false;
+    state.pauseRequested = false;
+    state.paused = false;
+    state.recoverableError = null;
     closeUpstream();
     sendJsonWs(client, { type: "error", message: error.message || String(error) });
   }
@@ -1686,45 +1823,27 @@ async function synthesizeOpenRouterSpeech(segment, options, apiKey, signal) {
     };
   }
 
-  const response = await fetch(OPENROUTER_TTS_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      Authorization: `Bearer ${trimmedApiKey}`,
-      "X-Title": "bigTTS"
-    },
-    body: JSON.stringify({
+  return requestOpenRouterSpeech({
+    url: OPENROUTER_TTS_URL,
+    apiKey: trimmedApiKey,
+    body: {
       model: options.model,
       input: requiresOpenRouterPcm(options.model) ? buildGeminiPrompt(segment.text, options) : segment.text,
       voice: options.voice,
       response_format: getOpenRouterResponseFormat(options.model),
       speed: options.speed
-    }),
-    signal
+    },
+    signal,
+    readResponse: async (response, attempt) => {
+      const audio = Buffer.from(await response.arrayBuffer());
+      if (!audio.length) throw new Error("OpenRouter TTS returned empty audio.");
+      return {
+        audio: requiresOpenRouterPcm(options.model) ? extractLinear16Pcm(audio) : audio,
+        generationId: response.headers.get("x-generation-id") || "",
+        attempts: attempt
+      };
+    }
   });
-
-  if (!response.ok) {
-    const message = await readErrorResponse(response);
-    throw new Error(`OpenRouter TTS request failed: ${message}`);
-  }
-
-  const audio = Buffer.from(await response.arrayBuffer());
-  return {
-    audio: requiresOpenRouterPcm(options.model) ? extractLinear16Pcm(audio) : audio,
-    generationId: response.headers.get("x-generation-id") || "",
-    attempts: 1
-  };
-}
-
-async function readErrorResponse(response) {
-  const text = await response.text().catch(() => "");
-  if (!text) return `${response.status} ${response.statusText}`;
-  try {
-    const parsed = JSON.parse(text);
-    return parsed?.error?.message || parsed?.message || text.slice(0, 240);
-  } catch {
-    return text.slice(0, 240);
-  }
 }
 
 async function synthesizeGoogleSpeech(text, options, credential, signal) {
@@ -2186,6 +2305,7 @@ function normalizeText(text) {
   return text
     .replace(/\r\n?/g, "\n")
     .replace(/[\t\f\v]+/g, " ")
+    .replace(/[\u0000-\u0008\u000e-\u001f\u007f]/g, "")
     .replace(/[ \u00a0]{2,}/g, " ")
     .replace(/\n{4,}/g, "\n\n\n")
     .trim();

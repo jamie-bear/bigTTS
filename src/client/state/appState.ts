@@ -1,6 +1,6 @@
 import { PROVIDERS, activeSegmentLimits } from "../config/providers";
 import { readCredentials, readProvider, readVoiceClones, STORAGE_KEYS } from "../services/storage";
-import type { GoogleOAuthStatus, NarrationPhase, OpenRouterModel, ProviderBalance, ProviderId, SelectOption, StitchedAudio, VoiceClone } from "../types/contracts";
+import type { GoogleOAuthStatus, NarrationPhase, OpenRouterModel, ProviderBalance, ProviderId, SegmentFailure, SelectOption, StitchedAudio, VoiceClone } from "../types/contracts";
 
 export interface AppState {
   provider: ProviderId;
@@ -35,6 +35,7 @@ export interface AppState {
   waveformLevel: number;
   stitchedAudio: StitchedAudio | null;
   audioAvailable: boolean;
+  segmentFailure: SegmentFailure | null;
   operationBusy: boolean;
 }
 
@@ -79,6 +80,7 @@ export function createInitialState(): AppState {
     waveformLevel: 0,
     stitchedAudio: null,
     audioAvailable: false,
+    segmentFailure: null,
     operationBusy: false
   };
 }

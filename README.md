@@ -12,9 +12,13 @@ The frontend uses React, TypeScript, and Vite. Provider configuration, persisten
 - Streams or buffers audio through a backend WebSocket proxy so provider credentials are not exposed in frontend source.
 - Splits long text by paragraph and sentence, using a continuity-aware multilingual segmenter for OpenRouter Gemini 3.1 while keeping xAI segments below the `text.delta` limit and Google segments below Cloud TTS request-size limits.
 - Generates every segment sequentially after narration starts, independent of playback position, while still streaming audio for listening.
+- Expands the player into a cumulative seekable timeline after each completed segment, preserving the listener's position as more audio arrives and staging source updates so active playback is never interrupted.
+- Pauses generation safely after the in-flight segment finishes and resumes with the next segment, without pausing audio playback.
 - Supports OpenRouter speech models, Gemini TTS voices through Google Cloud TTS, built-in xAI voices, MiniMax and Resemble.ai custom voices, language selection where available, speed controls, low-latency xAI options, and xAI text normalization.
 - Displays the selected provider's current balance when its synthesis credential exposes one, and refreshes it after every completed segment.
 - Automatically stitches completed segments into one continuous MP3 or WAV download after generation finishes.
+
+Generation pauses live only for the current browser/WebSocket session. Keep the tab open while paused; refreshing or closing it stops the session.
 
 ## Run With Docker Compose
 

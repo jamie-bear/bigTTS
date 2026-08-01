@@ -37,7 +37,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     audioEngineRef.current = new AudioEngine(audioRef.current, {
       onStatus: (message) => {
         const phase = stateRef.current.phase;
-        if (phase !== "completed" && phase !== "stopped" && phase !== "error") setStatus(message);
+        if (phase !== "completed" && phase !== "stopped" && phase !== "error" && phase !== "paused" && phase !== "recoverable") setStatus(message);
       },
       onBufferChange: (bufferSeconds) => dispatch({ type: "patch", patch: { bufferSeconds } }),
       onLevel: () => dispatch({ type: "patch", patch: { waveformLevel: performance.now() } }),
@@ -247,20 +247,56 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     } else if (event.type === "status" || event.type === "waiting") setStatus(event.message);
     else if (event.type === "segment") {
       audioEngineRef.current?.beginSegment(event.index);
-      dispatch({ type: "patch", patch: { phase: "generating", currentSegment: event.index, totalSegments: event.totalSegments, progress: ((event.index - 1) / event.totalSegments) * 100, status: `Generating segment ${event.index}...` } });
+      stateRef.current = { ...stateRef.current, phase: "generating" };
+      dispatch({ type: "patch", patch: { phase: "generating", currentSegment: event.index, totalSegments: event.totalSegments, progress: ((event.index - 1) / event.totalSegments) * 100, segmentFailure: null, status: `Generating segment ${event.index}...` } });
     } else if (event.type === "segmentDone") {
-      audioEngineRef.current?.finishSegment(event.index);
-      dispatch({ type: "patch", patch: { currentSegment: event.index, totalSegments: event.totalSegments, progress: (event.index / event.totalSegments) * 100, status: `Buffered segment ${event.index}.` } });
+      const stitchedAudio = audioEngineRef.current?.finishSegment(event.index) || null;
+      dispatch({ type: "patch", patch: { currentSegment: event.index, totalSegments: event.totalSegments, progress: (event.index / event.totalSegments) * 100, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: `Buffered segment ${event.index}.` } });
       void refreshBalance();
+    } else if (event.type === "pausePending") {
+      stateRef.current = { ...stateRef.current, phase: "pausing" };
+      dispatch({ type: "patch", patch: { phase: "pausing", status: `Finishing segment ${event.currentSegment} before pausing generation...` } });
+    } else if (event.type === "paused") {
+      stateRef.current = { ...stateRef.current, phase: "paused" };
+      dispatch({ type: "patch", patch: { phase: "paused", currentSegment: event.completedSegments, totalSegments: event.totalSegments, status: `Generation paused after segment ${event.completedSegments}. Playback remains available.` } });
+    } else if (event.type === "resumed") {
+      stateRef.current = { ...stateRef.current, phase: "generating" };
+      dispatch({ type: "patch", patch: { phase: "generating", totalSegments: event.totalSegments, status: `Generation resumed. Preparing segment ${event.nextSegment}...` } });
+    } else if (event.type === "segmentFailed") {
+      const segmentFailure = { index: event.index, totalSegments: event.totalSegments, message: event.message, details: event.details };
+      stateRef.current = { ...stateRef.current, phase: "recoverable", segmentFailure };
+      const stitchedAudio = audioEngineRef.current?.snapshot() || null;
+      dispatch({
+        type: "patch",
+        patch: {
+          phase: "recoverable",
+          currentSegment: event.index,
+          totalSegments: event.totalSegments,
+          progress: ((event.index - 1) / event.totalSegments) * 100,
+          segmentFailure,
+          stitchedAudio,
+          audioAvailable: Boolean(stitchedAudio),
+          status: `Segment ${event.index} needs attention. Retry it or skip it to continue.`
+        }
+      });
+    } else if (event.type === "segmentRetrying") {
+      stateRef.current = { ...stateRef.current, phase: "generating", segmentFailure: null };
+      dispatch({ type: "patch", patch: { phase: "generating", segmentFailure: null, status: `Retrying segment ${event.index}...` } });
+    } else if (event.type === "segmentSkipped") {
+      stateRef.current = { ...stateRef.current, phase: "generating", segmentFailure: null };
+      dispatch({ type: "patch", patch: { phase: "generating", currentSegment: event.index, totalSegments: event.totalSegments, progress: (event.index / event.totalSegments) * 100, segmentFailure: null, status: `Skipped segment ${event.index}. Continuing narration...` } });
     } else if (event.type === "complete") {
+      stateRef.current = { ...stateRef.current, phase: "completed" };
       const stitchedAudio = audioEngineRef.current?.complete() || null;
-      dispatch({ type: "patch", patch: { phase: "completed", progress: 100, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `Narration fully generated. Continuous ${stitchedAudio.extension.toUpperCase()} ready.` : "Narration fully generated, but no audio was received." } });
+      dispatch({ type: "patch", patch: { phase: "completed", progress: 100, segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `Narration fully generated. Continuous ${stitchedAudio.extension.toUpperCase()} ready.` : "Narration fully generated, but no audio was received." } });
     } else if (event.type === "cancelled") {
-      const stitchedAudio = audioEngineRef.current?.snapshot() || null;
-      dispatch({ type: "patch", patch: { phase: "stopped", stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${event.message || "Cancelled."} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : event.message || "Cancelled." } });
+      stateRef.current = { ...stateRef.current, phase: "stopped" };
+      const stitchedAudio = audioEngineRef.current?.finalize() || null;
+      dispatch({ type: "patch", patch: { phase: "stopped", segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${event.message || "Cancelled."} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : event.message || "Cancelled." } });
     } else if (event.type === "error") {
-      const stitchedAudio = audioEngineRef.current?.snapshot() || null;
-      dispatch({ type: "patch", patch: { phase: "error", stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${event.message || "Narration failed."} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : event.message || "Narration failed." } });
+      stateRef.current = { ...stateRef.current, phase: "error" };
+      const stitchedAudio = audioEngineRef.current?.finalize() || null;
+      dispatch({ type: "patch", patch: { phase: "error", segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${event.message || "Narration failed."} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : event.message || "Narration failed." } });
     }
   }, [refreshBalance, setStatus]);
 
@@ -283,20 +319,23 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     };
     const initialPcm = current.provider === "gemini" || current.provider === "google" || current.provider === "resemble" || (current.provider === "openrouter" && isOpenRouterPcmModel(current.openrouterModel));
     audioEngineRef.current?.reset(initialPcm ? "pcm_s16le" : "mpeg");
-    dispatch({ type: "patch", patch: { phase: "connecting", status: "Opening local narration stream...", progress: 0, currentSegment: 0, totalSegments: 0, stitchedAudio: null, audioAvailable: false } });
+    stateRef.current = { ...stateRef.current, phase: "connecting" };
+    dispatch({ type: "patch", patch: { phase: "connecting", status: "Opening local narration stream...", progress: 0, currentSegment: 0, totalSegments: 0, segmentFailure: null, stitchedAudio: null, audioAvailable: false } });
     const session = new NarrationSession({
       onOpen: () => setStatus("Narration stream connected."), onEvent: handleServerEvent,
       onAudio: (chunk) => audioEngineRef.current?.push(chunk),
       onClose: () => {
         const phase = stateRef.current.phase;
-        if (phase === "connecting" || phase === "generating") {
-          const stitchedAudio = audioEngineRef.current?.snapshot() || null;
-          dispatch({ type: "patch", patch: { phase: "error", stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `Narration stream closed unexpectedly. Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : "Narration stream closed unexpectedly." } });
+        if (phase === "connecting" || phase === "generating" || phase === "pausing" || phase === "paused" || phase === "recoverable") {
+          stateRef.current = { ...stateRef.current, phase: "error" };
+          const stitchedAudio = audioEngineRef.current?.finalize() || null;
+          dispatch({ type: "patch", patch: { phase: "error", segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `Narration stream closed unexpectedly. Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : "Narration stream closed unexpectedly." } });
         }
       },
       onError: (message) => {
-        const stitchedAudio = audioEngineRef.current?.snapshot() || null;
-        dispatch({ type: "patch", patch: { phase: "error", stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${message} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : message } });
+        stateRef.current = { ...stateRef.current, phase: "error" };
+        const stitchedAudio = audioEngineRef.current?.finalize() || null;
+        dispatch({ type: "patch", patch: { phase: "error", segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${message} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : message } });
       }
     });
     sessionRef.current = session;
@@ -305,9 +344,38 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
 
   const stopNarration = useCallback(() => {
     sessionRef.current?.cancel();
-    audioEngineRef.current?.stop();
-    const stitchedAudio = audioEngineRef.current?.snapshot() || null;
-    dispatch({ type: "patch", patch: { phase: "stopped", stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `Stopped. Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : "Stopped." } });
+    stateRef.current = { ...stateRef.current, phase: "stopped" };
+    const stitchedAudio = audioEngineRef.current?.finalize() || null;
+    dispatch({ type: "patch", patch: { phase: "stopped", segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `Stopped. Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : "Stopped." } });
+  }, []);
+
+  const pauseGeneration = useCallback(() => {
+    const phase = stateRef.current.phase;
+    if (phase !== "connecting" && phase !== "generating") return;
+    sessionRef.current?.pause();
+    stateRef.current = { ...stateRef.current, phase: "pausing" };
+    dispatch({ type: "patch", patch: { phase: "pausing", status: "Pause requested. Waiting for the current segment to finish..." } });
+  }, []);
+
+  const resumeGeneration = useCallback(() => {
+    if (stateRef.current.phase !== "paused") return;
+    sessionRef.current?.resume();
+    stateRef.current = { ...stateRef.current, phase: "generating" };
+    dispatch({ type: "patch", patch: { phase: "generating", status: "Resuming generation..." } });
+  }, []);
+
+  const retryFailedSegment = useCallback(() => {
+    if (stateRef.current.phase !== "recoverable") return;
+    sessionRef.current?.retrySegment();
+    stateRef.current = { ...stateRef.current, phase: "generating", segmentFailure: null };
+    dispatch({ type: "patch", patch: { phase: "generating", segmentFailure: null, status: `Retrying segment ${stateRef.current.currentSegment}...` } });
+  }, []);
+
+  const skipFailedSegment = useCallback(() => {
+    if (stateRef.current.phase !== "recoverable") return;
+    sessionRef.current?.skipSegment();
+    stateRef.current = { ...stateRef.current, phase: "generating", segmentFailure: null };
+    dispatch({ type: "patch", patch: { phase: "generating", segmentFailure: null, status: `Skipping segment ${stateRef.current.currentSegment}...` } });
   }, []);
 
   const disconnectGoogle = useCallback(async () => {
@@ -358,7 +426,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       clearText: () => dispatch({ type: "patch", patch: { text: "" } }),
       loadTextFile: async (file: File) => dispatch({ type: "patch", patch: { text: await file.text(), status: `Loaded ${file.name}.` } }),
       saveMinimaxClone, deleteMinimaxClone, renameMinimaxClone,
-      connectGoogle, disconnectGoogle, refreshGoogle, startNarration, stopNarration, download
+      connectGoogle, disconnectGoogle, refreshGoogle, startNarration, pauseGeneration, resumeGeneration, retryFailedSegment, skipFailedSegment, stopNarration, download
     }
   };
 }

@@ -4,6 +4,7 @@ import type { useBigTtsController } from "../hooks/useBigTtsController";
 import { ProviderSetup } from "./ProviderSetup";
 import { Button, Checkbox, SelectField } from "./ui/Controls";
 import { Icon } from "./ui/Icon";
+import type { SegmentFailure } from "../types/contracts";
 
 type Controller = ReturnType<typeof useBigTtsController>;
 
@@ -58,7 +59,9 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
 
 export function NarrationOutput({ controller, audioRef }: { controller: Controller; audioRef: RefObject<HTMLAudioElement | null> }) {
   const { state, actions } = controller;
-  const busy = state.phase === "connecting" || state.phase === "generating";
+  const sessionActive = state.phase === "connecting" || state.phase === "generating" || state.phase === "pausing" || state.phase === "paused" || state.phase === "recoverable";
+  const canPause = state.phase === "connecting" || state.phase === "generating";
+  const pauseLabel = state.phase === "paused" ? "Resume generation" : state.phase === "pausing" ? "Pausing..." : "Pause generation";
   const pcm = state.provider === "gemini" || state.provider === "google" || state.provider === "resemble" || (state.provider === "openrouter" && isOpenRouterPcmModel(state.openrouterModel));
   const extension = state.stitchedAudio?.extension.toUpperCase() || (pcm ? "WAV" : "MP3");
   const partial = state.audioAvailable && state.phase !== "completed";
@@ -66,12 +69,45 @@ export function NarrationOutput({ controller, audioRef }: { controller: Controll
     <section className="card output-card" aria-labelledby="output-heading">
       <div className="compact-heading output-heading"><div className="heading-icon"><Icon name="audio" /></div><div><p className="eyebrow">Output</p><h2 id="output-heading">Narration</h2></div><span className={`phase-badge phase-${state.phase}`}>{state.phase}</span></div>
       <div className="progress-block" aria-live="polite" aria-atomic="true"><div className="progress-copy"><span>{state.status}</span><span>{state.currentSegment} / {state.totalSegments} segments</span></div><progress value={state.progress} max={100} aria-label="Narration generation progress" /></div>
+      {state.segmentFailure && <SegmentFailurePanel failure={state.segmentFailure} onRetry={actions.retryFailedSegment} onSkip={actions.skipFailedSegment} />}
       <div className="buffer-row"><span>Playback buffer</span><strong>{Math.round(state.bufferSeconds)}s</strong></div>
       <audio ref={audioRef} controls aria-label="Generated narration playback" />
-      <div className="button-grid"><Button id="startButton" type="button" className="primary" disabled={busy} onClick={() => void actions.startNarration()}><Icon name="play" />Start narration</Button><Button type="button" disabled={!busy} onClick={actions.stopNarration}><Icon name="stop" />Stop</Button></div>
+      <div className="button-grid">
+        <Button id="startButton" type="button" className="primary" disabled={sessionActive} onClick={() => void actions.startNarration()}><Icon name="play" />Start narration</Button>
+        <Button type="button" disabled={!canPause && state.phase !== "paused"} onClick={state.phase === "paused" ? actions.resumeGeneration : actions.pauseGeneration}><Icon name={state.phase === "paused" ? "play" : "pause"} />{pauseLabel}</Button>
+        <Button type="button" disabled={!sessionActive} onClick={actions.stopNarration}><Icon name="stop" />Stop</Button>
+      </div>
       <Button type="button" className="download-button" disabled={!state.audioAvailable} onClick={actions.download}><Icon name="download" />Download {partial ? "partial " : ""}{extension}<span>{state.audioAvailable ? "Includes all audio received so far" : "Available as soon as audio is received"}</span></Button>
     </section>
   </aside>;
+}
+
+function SegmentFailurePanel({ failure, onRetry, onSkip }: { failure: SegmentFailure; onRetry: () => void; onSkip: () => void }) {
+  const details = failure.details;
+  const hasDiagnostics = Boolean(details && Object.keys(details).length);
+  return <div className="segment-failure" role="alert">
+    <div><strong>Segment {failure.index} was rejected</strong><span>{failure.message}</span></div>
+    {hasDiagnostics && <details>
+      <summary>Provider diagnostics</summary>
+      <dl>
+        {details?.status !== undefined && <><dt>HTTP status</dt><dd>{details.status}</dd></>}
+        {details?.errorType && <><dt>Error type</dt><dd><code>{details.errorType}</code></dd></>}
+        {details?.providerCode && <><dt>Provider code</dt><dd><code>{details.providerCode}</code></dd></>}
+        {details?.providerName && <><dt>Provider</dt><dd>{details.providerName}</dd></>}
+        {details?.attempts !== undefined && <><dt>Attempts</dt><dd>{details.attempts}</dd></>}
+        {details?.reasons?.length && <><dt>Reasons</dt><dd>{details.reasons.join("; ")}</dd></>}
+        {details?.flaggedInput && <><dt>Flagged input</dt><dd><q>{details.flaggedInput}</q></dd></>}
+        {details?.generationId && <><dt>Generation ID</dt><dd><code>{details.generationId}</code></dd></>}
+        {details?.requestId && <><dt>Request ID</dt><dd><code>{details.requestId}</code></dd></>}
+        {details?.routingSummary && <><dt>Routing</dt><dd>{details.routingSummary}</dd></>}
+      </dl>
+    </details>}
+    <div className="segment-recovery-actions">
+      <Button type="button" className="primary" onClick={onRetry}><Icon name="refresh" />Retry segment</Button>
+      <Button type="button" onClick={onSkip}><Icon name="play" />Skip segment</Button>
+    </div>
+    <small>Skipping continues with the next segment and omits this segment from the audio.</small>
+  </div>;
 }
 
 function MiniMaxVoiceManager({ controller }: { controller: Controller }) {

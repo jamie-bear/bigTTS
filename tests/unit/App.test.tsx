@@ -19,6 +19,8 @@ describe("bigTTS application shell", () => {
     expect(screen.getByRole("option", { name: "Gemini Developer API — API key" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Google Cloud TTS — OAuth" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start narration" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Pause generation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
   });
 
   it("explains Google access routes and renders voice gender as provider-backed text", async () => {

@@ -1,3 +1,5 @@
+import { requestOpenRouterSpeech } from "./openRouterSpeech.js";
+
 export const OPENROUTER_GEMINI_31_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
 export const GEMINI_31_DEFAULT_SEGMENT_CHARS = 1_200;
 export const GEMINI_31_MAX_SEGMENT_CHARS = 2_500;
@@ -5,7 +7,6 @@ export const GEMINI_31_CONTEXT_CHARS = 240;
 export const GEMINI_31_MAX_DIRECTION_CHARS = 800;
 
 const STRONG_BOUNDARIES = new Set(["chapter", "scene"]);
-const RETRYABLE_STATUSES = new Set([500, 502, 503, 529]);
 const CLAUSE_END = /[;:,؛،、，；：—–]/u;
 const SENTENCE_END = /[.!?؟۔।。！？]/u;
 
@@ -168,62 +169,37 @@ ${segment.text}`;
 }
 
 export async function requestOpenRouterGemini31Speech(options) {
-  const fetchImpl = options.fetchImpl || globalThis.fetch;
-  if (typeof fetchImpl !== "function") throw new Error("A fetch implementation is required.");
-  const delays = options.retryDelays || [350, 900];
-  const maxAttempts = Math.min(3, Math.max(1, Number(options.maxAttempts) || 3));
-  let lastError;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    if (options.signal?.aborted) throw abortError();
-    try {
-      const response = await fetchImpl(options.url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json; charset=utf-8",
-          Authorization: `Bearer ${options.apiKey}`,
-          "X-Title": options.title || "bigTTS"
-        },
-        body: JSON.stringify({
-          model: OPENROUTER_GEMINI_31_TTS_MODEL,
-          input: options.input,
-          voice: options.voice,
-          response_format: "pcm"
-        }),
-        signal: options.signal
-      });
-
-      if (!response.ok) {
-        const message = await readResponseError(response);
-        const error = new Error(`OpenRouter TTS request failed: ${message}`);
-        error.status = response.status;
-        if (!RETRYABLE_STATUSES.has(response.status) || attempt >= maxAttempts) throw error;
-        lastError = error;
-      } else {
-        const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-        if (contentType.includes("json") || contentType.startsWith("text/")) {
-          throw new Error(`OpenRouter returned ${contentType || "a non-audio response"} for Gemini PCM audio.`);
-        }
-        const audio = extractPcmBytes(new Uint8Array(await response.arrayBuffer()));
-        if (!audio.byteLength) throw new Error("OpenRouter Gemini TTS returned empty PCM audio.");
-        if (audio.byteLength % 2 !== 0) throw new Error("OpenRouter Gemini TTS returned an invalid odd-length PCM payload.");
-        return {
-          audio,
-          generationId: response.headers.get("x-generation-id") || "",
-          attempts: attempt
-        };
+  return requestOpenRouterSpeech({
+    url: options.url,
+    apiKey: options.apiKey,
+    title: options.title,
+    signal: options.signal,
+    fetchImpl: options.fetchImpl,
+    sleep: options.sleep,
+    retryDelays: options.retryDelays,
+    maxAttempts: options.maxAttempts,
+    onRetry: options.onRetry,
+    body: {
+      model: OPENROUTER_GEMINI_31_TTS_MODEL,
+      input: options.input,
+      voice: options.voice,
+      response_format: "pcm"
+    },
+    readResponse: async (response, attempt) => {
+      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+      if (contentType.includes("json") || contentType.startsWith("text/")) {
+        throw new Error(`OpenRouter returned ${contentType || "a non-audio response"} for Gemini PCM audio.`);
       }
-    } catch (error) {
-      if (options.signal?.aborted || error?.name === "AbortError") throw error;
-      const retryable = typeof error?.status === "number" ? RETRYABLE_STATUSES.has(error.status) : true;
-      if (!retryable || attempt >= maxAttempts) throw error;
-      lastError = error;
+      const audio = extractPcmBytes(new Uint8Array(await response.arrayBuffer()));
+      if (!audio.byteLength) throw new Error("OpenRouter Gemini TTS returned empty PCM audio.");
+      if (audio.byteLength % 2 !== 0) throw new Error("OpenRouter Gemini TTS returned an invalid odd-length PCM payload.");
+      return {
+        audio,
+        generationId: response.headers.get("x-generation-id") || "",
+        attempts: attempt
+      };
     }
-
-    await abortableDelay(delays[attempt - 1] ?? delays.at(-1) ?? 0, options.signal, options.sleep);
-  }
-
-  throw lastError || new Error("OpenRouter Gemini TTS request failed.");
+  });
 }
 
 function createSemanticUnits(text, hardMaxChars, locale) {
@@ -433,17 +409,6 @@ function clampInteger(value, minimum, maximum, fallback) {
   return Math.round(Math.min(maximum, Math.max(minimum, Number.isFinite(number) ? number : fallback)));
 }
 
-async function readResponseError(response) {
-  const text = await response.text().catch(() => "");
-  if (!text) return `${response.status} ${response.statusText}`.trim();
-  try {
-    const parsed = JSON.parse(text);
-    return parsed?.error?.message || parsed?.message || text.slice(0, 240);
-  } catch {
-    return text.slice(0, 240);
-  }
-}
-
 function extractPcmBytes(audio) {
   if (audio.byteLength < 44 || ascii(audio, 0, 4) !== "RIFF" || ascii(audio, 8, 12) !== "WAVE") return audio;
   const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
@@ -461,27 +426,4 @@ function extractPcmBytes(audio) {
 
 function ascii(bytes, start, end) {
   return String.fromCharCode(...bytes.slice(start, end));
-}
-
-async function abortableDelay(milliseconds, signal, sleep) {
-  if (!milliseconds) return;
-  if (typeof sleep === "function") {
-    await sleep(milliseconds, signal);
-    return;
-  }
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, milliseconds);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortError());
-    };
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function abortError() {
-  const error = new Error("The operation was aborted.");
-  error.name = "AbortError";
-  return error;
 }

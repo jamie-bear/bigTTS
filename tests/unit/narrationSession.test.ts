@@ -58,4 +58,15 @@ describe("NarrationSession", () => {
     expect(JSON.parse(MockWebSocket.instance.sent.at(-1) || "{}")).toEqual({ type: "cancel" });
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("sends pause and resume commands without closing the session", () => {
+    const session = new NarrationSession({ onOpen: vi.fn(), onEvent: vi.fn(), onAudio: vi.fn(), onClose: vi.fn(), onError: vi.fn() });
+    session.start(command, () => ({ paused: false, bufferedAheadSeconds: 0 }));
+    MockWebSocket.instance.dispatchEvent(new Event("open"));
+    session.pause();
+    session.resume();
+    expect(MockWebSocket.instance.sent.slice(-2).map((value) => JSON.parse(value))).toEqual([{ type: "pause" }, { type: "resume" }]);
+    expect(MockWebSocket.instance.readyState).toBe(MockWebSocket.OPEN);
+    session.dispose();
+  });
 });

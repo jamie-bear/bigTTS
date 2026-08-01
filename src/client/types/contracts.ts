@@ -1,6 +1,6 @@
 export type ProviderId = "gemini" | "xai" | "google" | "openrouter" | "resemble" | "minimax";
 
-export type NarrationPhase = "idle" | "connecting" | "generating" | "completed" | "stopped" | "error";
+export type NarrationPhase = "idle" | "connecting" | "generating" | "pausing" | "paused" | "recoverable" | "completed" | "stopped" | "error";
 export type AudioEncoding = "mpeg" | "pcm_s16le";
 export type GeminiBoundary = "start" | "sentence" | "paragraph" | "scene" | "chapter" | "forced" | "end";
 
@@ -89,13 +89,39 @@ export interface TelemetryCommand {
   bufferedAheadSeconds: number;
 }
 
-export type ClientCommand = StartNarrationCommand | TelemetryCommand | { type: "cancel" };
+export interface OpenRouterErrorDetails {
+  status?: number;
+  code?: string;
+  errorType?: string;
+  providerCode?: string;
+  providerName?: string;
+  reasons?: string[];
+  flaggedInput?: string;
+  generationId?: string;
+  requestId?: string;
+  routingSummary?: string;
+  attempts?: number;
+}
+
+export interface SegmentFailure {
+  index: number;
+  totalSegments: number;
+  message: string;
+  details?: OpenRouterErrorDetails;
+}
+
+export type ClientCommand = StartNarrationCommand | TelemetryCommand | { type: "pause" | "resume" | "retrySegment" | "skipSegment" | "cancel" };
 
 export type ServerEvent =
   | { type: "meta"; provider: ProviderId; audioEncoding: AudioEncoding; sampleRate: number; channels: number; totalChars: number; totalSegments: number; segmentChars: number }
   | { type: "status" | "waiting"; message: string }
   | { type: "segment"; index: number; totalSegments: number; boundaryBefore?: GeminiBoundary; boundaryAfter?: GeminiBoundary }
   | { type: "segmentDone"; index: number; totalSegments: number; generationId?: string; attempts?: number }
+  | { type: "pausePending"; currentSegment: number; totalSegments: number }
+  | { type: "paused"; completedSegments: number; totalSegments: number }
+  | { type: "resumed"; nextSegment: number; totalSegments: number }
+  | { type: "segmentFailed"; index: number; totalSegments: number; message: string; details?: OpenRouterErrorDetails }
+  | { type: "segmentRetrying" | "segmentSkipped"; index: number; totalSegments: number }
   | { type: "bytes"; totalBytes: number }
   | { type: "complete" }
   | { type: "cancelled" | "error"; message?: string };

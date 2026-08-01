@@ -11,19 +11,37 @@ async function mockBaseApis(page: Page) {
 
 test.beforeEach(async ({ page, context }) => {
   await context.routeWebSocket(/\/stream$/, (socket) => {
+    let narrationText = "";
     socket.onMessage((message) => {
       const command = JSON.parse(String(message));
-      if (command.type !== "start") return;
-      if (command.text === "inspect-gemini-options") {
-        socket.send(JSON.stringify({ type: "status", message: `continuity=${command.options.geminiContinuity}; direction=${command.options.geminiNarratorDirection}` }));
+      if (command.type === "pause" && narrationText === "pause-flow") {
+        socket.send(JSON.stringify({ type: "pausePending", currentSegment: 1, totalSegments: 2 }));
+        socket.send(JSON.stringify({ type: "segmentDone", index: 1, totalSegments: 2 }));
+        socket.send(JSON.stringify({ type: "paused", completedSegments: 1, totalSegments: 2 }));
         return;
       }
-      socket.send(JSON.stringify({ type: "meta", provider: command.options.provider, audioEncoding: "mpeg", sampleRate: 24000, channels: 1, totalChars: 11, totalSegments: 1, segmentChars: command.options.segmentChars }));
-      socket.send(JSON.stringify({ type: "segment", index: 1, totalSegments: 1 }));
-      socket.send(Buffer.from([0xff, 0xfb, 0x90, 0x64]));
-      if (command.text === "partial") return;
-      socket.send(JSON.stringify({ type: "segmentDone", index: 1, totalSegments: 1 }));
-      socket.send(JSON.stringify({ type: "complete" }));
+      if (command.type === "resume" && narrationText === "pause-flow") {
+        socket.send(JSON.stringify({ type: "resumed", nextSegment: 2, totalSegments: 2 }));
+        socket.send(JSON.stringify({ type: "segment", index: 2, totalSegments: 2 }));
+        socket.send(Buffer.from([0xff, 0xfb, 0x90, 0x65]));
+        socket.send(JSON.stringify({ type: "segmentDone", index: 2, totalSegments: 2 }));
+        socket.send(JSON.stringify({ type: "complete" }));
+        return;
+      }
+      if (command.type === "start") {
+        narrationText = command.text;
+        if (command.text === "inspect-gemini-options") {
+          socket.send(JSON.stringify({ type: "status", message: `continuity=${command.options.geminiContinuity}; direction=${command.options.geminiNarratorDirection}` }));
+          return;
+        }
+        const totalSegments = command.text === "pause-flow" ? 2 : 1;
+        socket.send(JSON.stringify({ type: "meta", provider: command.options.provider, audioEncoding: "mpeg", sampleRate: 24000, channels: 1, totalChars: 11, totalSegments, segmentChars: command.options.segmentChars }));
+        socket.send(JSON.stringify({ type: "segment", index: 1, totalSegments }));
+        socket.send(Buffer.from([0xff, 0xfb, 0x90, 0x64]));
+        if (command.text === "partial" || command.text === "pause-flow") return;
+        socket.send(JSON.stringify({ type: "segmentDone", index: 1, totalSegments: 1 }));
+        socket.send(JSON.stringify({ type: "complete" }));
+      }
     });
   });
   await mockBaseApis(page);
@@ -126,4 +144,21 @@ test("makes partial stitched audio downloadable before completion and after stop
   const downloadPromise = page.waitForEvent("download");
   await partialButton.click();
   expect((await downloadPromise).suggestedFilename()).toBe("xai-audiobook.mp3");
+});
+
+test("pauses generation at a segment boundary and resumes with the next segment", async ({ page }) => {
+  await page.getByLabel("Provider", { exact: true }).selectOption("xai");
+  await page.getByLabel("xAI API key").fill("test-key");
+  await page.getByLabel("Book or chapter text").fill("pause-flow");
+  await page.getByRole("button", { name: "Start narration" }).click();
+  await expect(page.getByText("Generating segment 1...")).toBeVisible();
+  await page.getByRole("button", { name: "Pause generation" }).click();
+  await expect(page.getByText("Generation paused after segment 1. Playback remains available.")).toBeVisible();
+  await expect(page.getByText("1 / 2 segments")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Resume generation" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Start narration" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stop" })).toBeEnabled();
+  await page.getByRole("button", { name: "Resume generation" }).click();
+  await expect(page.getByText("Narration fully generated. Continuous MP3 ready.")).toBeVisible();
+  await expect(page.getByText("2 / 2 segments")).toBeVisible();
 });

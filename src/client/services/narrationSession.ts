@@ -50,6 +50,14 @@ export class NarrationSession {
     this.stopTelemetry();
   }
 
+  pause() { this.send({ type: "pause" }); }
+
+  resume() { this.send({ type: "resume" }); }
+
+  retrySegment() { this.send({ type: "retrySegment" }); }
+
+  skipSegment() { this.send({ type: "skipSegment" }); }
+
   dispose() { this.cancel(); }
 
   private send(command: ClientCommand) {
