@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode, type RefObject } from "react";
-import { isOpenRouterPcmModel, MINIMAX_LANGUAGES, SEGMENT_OPTIONS } from "../config/providers";
+import { isOpenRouterGemini31Model, isOpenRouterPcmModel, MINIMAX_LANGUAGES, SEGMENT_OPTIONS } from "../config/providers";
 import type { useBigTtsController } from "../hooks/useBigTtsController";
 import { ProviderSetup } from "./ProviderSetup";
 import { Button, Checkbox, SelectField } from "./ui/Controls";
@@ -12,6 +12,7 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
   const lowLatencyAvailable = Boolean(providerConfig.supportsLowLatency);
   const textNormalizationAvailable = Boolean(providerConfig.supportsTextNormalization);
   const unavailableCapabilityCount = Number(!lowLatencyAvailable) + Number(!textNormalizationAvailable);
+  const gemini31OpenRouter = state.provider === "openrouter" && isOpenRouterGemini31Model(state.openrouterModel);
   return <aside className="settings-panel" aria-label="Narration setup">
     <section className="card setup-card" aria-labelledby="provider-heading">
       <div className="compact-heading"><div className="heading-icon"><Icon name="key" /></div><div><p className="eyebrow">Connection</p><h2 id="provider-heading">Provider & access</h2></div></div>
@@ -23,12 +24,22 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
       <form className="settings" aria-label="Narration settings" onSubmit={(event) => event.preventDefault()}>
         <SelectField id="voice" label="Voice" options={voiceOptions} value={state.voice} onChange={(event) => actions.setVoice(event.target.value)} helper={hasVoiceGenderMetadata ? "Gender is shown as text only where provider metadata is available." : undefined} />
         {state.provider === "minimax" && <MiniMaxVoiceManager controller={controller} />}
-        <div className="field-grid"><SelectField id="language" label="Language" options={providerConfig.languages} value={state.language} onChange={(event) => actions.setLanguage(event.target.value)} /><SelectField id="segmentChars" label="Segment size" options={SEGMENT_OPTIONS.map((option) => ({ ...option, disabled: Number(option.value) > limits.maxSegmentChars }))} value={state.segmentChars} onChange={(event) => actions.setSegmentChars(Number(event.target.value))} helper={`${state.segmentChars.toLocaleString()} characters per request`} /></div>
+        <div className="field-grid"><SelectField id="language" label="Language" options={providerConfig.languages} value={state.language} onChange={(event) => actions.setLanguage(event.target.value)} /><SelectField id="segmentChars" label={gemini31OpenRouter ? "Segment target" : "Segment size"} options={SEGMENT_OPTIONS.map((option) => ({ ...option, disabled: Number(option.value) > limits.maxSegmentChars }))} value={state.segmentChars} onChange={(event) => actions.setSegmentChars(Number(event.target.value))} helper={gemini31OpenRouter ? `${state.segmentChars.toLocaleString()}-character target; cuts follow sentence and paragraph structure` : `${state.segmentChars.toLocaleString()} characters per request`} /></div>
         <div className={`setting-block ${providerConfig.supportsSpeed ? "" : "is-unavailable"}`}>
           <div className="setting-title"><label htmlFor="speed">Reading speed</label>{providerConfig.supportsSpeed ? <output htmlFor="speed">{state.speed.toFixed(2)}×</output> : <span className="availability-badge">Unavailable</span>}</div>
           <input id="speed" type="range" min="0.7" max="1.5" step="0.05" value={state.speed} disabled={!providerConfig.supportsSpeed} onChange={(event) => actions.setSpeed(Number(event.target.value))} />
+          {gemini31OpenRouter && <small>Gemini follows this as a narration direction; audio is not mechanically time-stretched.</small>}
           {!providerConfig.supportsSpeed && <small>This provider does not accept a reading-speed setting.</small>}
         </div>
+        {gemini31OpenRouter && <details className="gemini-continuity-panel">
+          <summary><span>Gemini continuity</span><span>{state.geminiContinuity ? "Enhanced" : "Standard"}</span></summary>
+          <div className="gemini-continuity-settings">
+            <Checkbox id="geminiContinuity" label="Enhanced continuity" checked={state.geminiContinuity} onChange={(event) => actions.setGeminiContinuity(event.target.checked)} />
+            <small>Uses compact silent context from neighboring segments to sustain the narrator's delivery.</small>
+            <label htmlFor="geminiNarratorDirection"><span>Narrator direction <em>Optional</em></span><textarea className="gemini-direction" id="geminiNarratorDirection" maxLength={800} value={state.geminiNarratorDirection} onChange={(event) => actions.setGeminiNarratorDirection(event.target.value)} placeholder="For example: Warm, intimate literary narration with restrained emotion." /></label>
+            <small>Keep this compatible with the selected voice. The same direction is repeated for every segment. {state.geminiNarratorDirection.length}/800</small>
+          </div>
+        </details>}
         <div className="capability-list" aria-label="Provider capabilities">
           {lowLatencyAvailable && <Capability available unavailableText=""><Checkbox id="lowLatency" label="Optimize first audio chunk" checked={state.lowLatency} onChange={(event) => actions.setLowLatency(event.target.checked)} /></Capability>}
           {textNormalizationAvailable && <Capability available unavailableText=""><Checkbox id="textNormalization" label="Normalize numbers and abbreviations" checked={state.textNormalization} onChange={(event) => actions.setTextNormalization(event.target.checked)} /></Capability>}

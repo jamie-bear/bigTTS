@@ -19,7 +19,8 @@ const command: StartNarrationCommand = {
   text: "Hello",
   options: {
     provider: "xai", voice: "eve", language: "auto", speed: 1, segmentChars: 4500,
-    optimizeStreamingLatency: true, textNormalization: false, model: ""
+    optimizeStreamingLatency: true, textNormalization: false, model: "",
+    geminiContinuity: false, geminiNarratorDirection: ""
   }
 };
 

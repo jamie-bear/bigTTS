@@ -9,6 +9,10 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    files: ["src/server/**/*.js", "scripts/**/*.mjs", "tests/**/*.js"],
+    languageOptions: { globals: { ...globals.es2021, ...globals.node } }
+  },
+  {
     files: ["src/client/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
     plugins: { "react-hooks": reactHooks, "react-refresh": reactRefresh },

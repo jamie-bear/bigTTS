@@ -1,5 +1,7 @@
 import type { ProviderConfig, ProviderId, SelectOption } from "../types/contracts";
 
+export const OPENROUTER_GEMINI_31_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
+
 export const GEMINI_VOICE_GENDERS: Record<string, "female" | "male"> = {
   Achernar: "female", Achird: "male", Algenib: "male", Algieba: "male", Alnilam: "male",
   Aoede: "female", Autonoe: "female", Callirrhoe: "female", Charon: "male", Despina: "female",
@@ -98,6 +100,7 @@ export const MINIMAX_MODELS = ["speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-
 
 export const isProviderId = (value: string | null): value is ProviderId => Boolean(value && value in PROVIDERS);
 export const isOpenRouterPcmModel = (modelId: string) => /(^|[/:-])(?:google|gemini)(?:[/:-]|$)/i.test(modelId);
+export const isOpenRouterGemini31Model = (modelId: string) => modelId.trim().toLowerCase() === OPENROUTER_GEMINI_31_TTS_MODEL;
 
 export function sortVoiceOptions(options: SelectOption[]) {
   return [...options].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base", numeric: true }));
@@ -121,7 +124,7 @@ export function knownModelVoiceGender(modelId: string, voice: string) {
 
 export function activeSegmentLimits(provider: ProviderId, model: string) {
   const config = PROVIDERS[provider];
-  return provider === "openrouter" && isOpenRouterPcmModel(model)
-    ? { defaultSegmentChars: 500, maxSegmentChars: 4500 }
+  return provider === "openrouter" && isOpenRouterGemini31Model(model)
+    ? { defaultSegmentChars: 1200, maxSegmentChars: 2500 }
     : { defaultSegmentChars: config.defaultSegmentChars, maxSegmentChars: config.maxSegmentChars };
 }

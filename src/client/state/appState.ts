@@ -17,6 +17,8 @@ export interface AppState {
   openrouterModel: string;
   openrouterModels: OpenRouterModel[];
   openrouterVoiceOptions: Record<string, SelectOption[]>;
+  geminiContinuity: boolean;
+  geminiNarratorDirection: string;
   minimaxModel: string;
   minimaxVoices: VoiceClone[];
   resembleVoices: VoiceClone[];
@@ -59,6 +61,8 @@ export function createInitialState(): AppState {
     openrouterModel: sessionStorage.getItem(STORAGE_KEYS.openrouterModel) ?? "",
     openrouterModels: [],
     openrouterVoiceOptions: {},
+    geminiContinuity: sessionStorage.getItem(STORAGE_KEYS.geminiContinuity) !== "false",
+    geminiNarratorDirection: sessionStorage.getItem(STORAGE_KEYS.geminiNarratorDirection) ?? "",
     minimaxModel: sessionStorage.getItem(STORAGE_KEYS.minimaxModel) ?? "speech-2.8-hd",
     minimaxVoices: readVoiceClones("minimaxVoiceClones"),
     resembleVoices: [],

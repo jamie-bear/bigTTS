@@ -14,6 +14,10 @@ test.beforeEach(async ({ page, context }) => {
     socket.onMessage((message) => {
       const command = JSON.parse(String(message));
       if (command.type !== "start") return;
+      if (command.text === "inspect-gemini-options") {
+        socket.send(JSON.stringify({ type: "status", message: `continuity=${command.options.geminiContinuity}; direction=${command.options.geminiNarratorDirection}` }));
+        return;
+      }
       socket.send(JSON.stringify({ type: "meta", provider: command.options.provider, audioEncoding: "mpeg", sampleRate: 24000, channels: 1, totalChars: 11, totalSegments: 1, segmentChars: command.options.segmentChars }));
       socket.send(JSON.stringify({ type: "segment", index: 1, totalSegments: 1 }));
       socket.send(Buffer.from([0xff, 0xfb, 0x90, 0x64]));
@@ -95,6 +99,19 @@ test("refreshes the selected provider balance after a segment completes", async 
   await page.getByLabel("Book or chapter text").fill("Hello world");
   await page.getByRole("button", { name: "Start narration" }).click();
   await expect(page.getByLabel("Provider balance")).toContainText("9.00");
+});
+
+test("configures and serializes OpenRouter Gemini 3.1 continuity", async ({ page }) => {
+  await page.route("**/api/openrouter/models", (route) => route.fulfill({ json: { models: [{ id: "google/gemini-3.1-flash-tts-preview", name: "Gemini 3.1 Flash TTS Preview", voices: [{ value: "Kore", label: "Kore" }] }] } }));
+  await page.getByLabel("OpenRouter API key").fill("test-key");
+  await expect(page.getByLabel("OpenRouter model")).toHaveValue("google/gemini-3.1-flash-tts-preview");
+  await expect(page.getByLabel("Segment target")).toHaveValue("1200");
+  await page.getByText("Gemini continuity", { exact: true }).click();
+  await expect(page.getByLabel("Enhanced continuity")).toBeChecked();
+  await page.getByLabel("Narrator direction").fill("Warm and restrained.");
+  await page.getByLabel("Book or chapter text").fill("inspect-gemini-options");
+  await page.getByRole("button", { name: "Start narration" }).click();
+  await expect(page.getByText("continuity=true; direction=Warm and restrained.")).toBeVisible();
 });
 
 test("makes partial stitched audio downloadable before completion and after stop", async ({ page }) => {

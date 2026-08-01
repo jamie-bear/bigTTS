@@ -1,4 +1,4 @@
-import { activeSegmentLimits, GEMINI_VOICES, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDER_ORDER, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../../src/client/config/providers";
+import { OPENROUTER_GEMINI_31_TTS_MODEL, activeSegmentLimits, GEMINI_VOICES, isOpenRouterGemini31Model, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDER_ORDER, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../../src/client/config/providers";
 
 describe("provider registry", () => {
   it("contains every supported provider, including the restored Gemini option", () => {
@@ -8,7 +8,10 @@ describe("provider registry", () => {
 
   it("applies the quality-first OpenRouter Gemini segment limits", () => {
     expect(isOpenRouterPcmModel("google/gemini-tts")).toBe(true);
-    expect(activeSegmentLimits("openrouter", "google/gemini-tts")).toEqual({ defaultSegmentChars: 500, maxSegmentChars: 4500 });
+    expect(isOpenRouterGemini31Model(OPENROUTER_GEMINI_31_TTS_MODEL)).toBe(true);
+    expect(isOpenRouterGemini31Model("google/gemini-tts")).toBe(false);
+    expect(activeSegmentLimits("openrouter", OPENROUTER_GEMINI_31_TTS_MODEL)).toEqual({ defaultSegmentChars: 1200, maxSegmentChars: 2500 });
+    expect(activeSegmentLimits("openrouter", "google/gemini-tts")).toEqual({ defaultSegmentChars: 2500, maxSegmentChars: 12000 });
     expect(activeSegmentLimits("openrouter", "mistral/voxtral-mini-tts")).toEqual({ defaultSegmentChars: 2500, maxSegmentChars: 12000 });
     expect(PROVIDERS.gemini.defaultSegmentChars).toBe(500);
     expect(PROVIDERS.google.defaultSegmentChars).toBe(500);

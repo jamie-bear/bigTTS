@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { activeSegmentLimits, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
+import { activeSegmentLimits, isOpenRouterGemini31Model, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
 import { api, fileToBase64 } from "../services/apiClient";
 import { AudioEngine } from "../services/audioEngine";
 import { NarrationSession } from "../services/narrationSession";
@@ -277,7 +277,9 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     const options: NarrationOptions = {
       provider: current.provider, voice: current.voice, language: current.language, speed: current.speed,
       segmentChars: current.segmentChars, optimizeStreamingLatency: current.lowLatency, textNormalization: current.textNormalization,
-      model: current.provider === "openrouter" ? current.openrouterModel : current.provider === "minimax" ? current.minimaxModel : ""
+      model: current.provider === "openrouter" ? current.openrouterModel : current.provider === "minimax" ? current.minimaxModel : "",
+      geminiContinuity: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiContinuity,
+      geminiNarratorDirection: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) ? current.geminiNarratorDirection : ""
     };
     const initialPcm = current.provider === "gemini" || current.provider === "google" || current.provider === "resemble" || (current.provider === "openrouter" && isOpenRouterPcmModel(current.openrouterModel));
     audioEngineRef.current?.reset(initialPcm ? "pcm_s16le" : "mpeg");
@@ -343,6 +345,15 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       setSegmentChars: (value: number) => dispatch({ type: "segment", value }),
       setLowLatency: (lowLatency: boolean) => dispatch({ type: "patch", patch: { lowLatency } }),
       setTextNormalization: (textNormalization: boolean) => dispatch({ type: "patch", patch: { textNormalization } }),
+      setGeminiContinuity: (geminiContinuity: boolean) => {
+        sessionStorage.setItem(STORAGE_KEYS.geminiContinuity, String(geminiContinuity));
+        dispatch({ type: "patch", patch: { geminiContinuity } });
+      },
+      setGeminiNarratorDirection: (geminiNarratorDirection: string) => {
+        const value = geminiNarratorDirection.slice(0, 800);
+        sessionStorage.setItem(STORAGE_KEYS.geminiNarratorDirection, value);
+        dispatch({ type: "patch", patch: { geminiNarratorDirection: value } });
+      },
       loadSample: () => dispatch({ type: "patch", patch: { text: SAMPLE_TEXT } }),
       clearText: () => dispatch({ type: "patch", patch: { text: "" } }),
       loadTextFile: async (file: File) => dispatch({ type: "patch", patch: { text: await file.text(), status: `Loaded ${file.name}.` } }),

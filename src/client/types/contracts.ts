@@ -2,6 +2,7 @@ export type ProviderId = "gemini" | "xai" | "google" | "openrouter" | "resemble"
 
 export type NarrationPhase = "idle" | "connecting" | "generating" | "completed" | "stopped" | "error";
 export type AudioEncoding = "mpeg" | "pcm_s16le";
+export type GeminiBoundary = "start" | "sentence" | "paragraph" | "scene" | "chapter" | "forced" | "end";
 
 export interface SelectOption {
   value: string;
@@ -71,6 +72,8 @@ export interface NarrationOptions {
   optimizeStreamingLatency: boolean;
   textNormalization: boolean;
   model: string;
+  geminiContinuity: boolean;
+  geminiNarratorDirection: string;
 }
 
 export interface StartNarrationCommand {
@@ -91,7 +94,8 @@ export type ClientCommand = StartNarrationCommand | TelemetryCommand | { type: "
 export type ServerEvent =
   | { type: "meta"; provider: ProviderId; audioEncoding: AudioEncoding; sampleRate: number; channels: number; totalChars: number; totalSegments: number; segmentChars: number }
   | { type: "status" | "waiting"; message: string }
-  | { type: "segment" | "segmentDone"; index: number; totalSegments: number }
+  | { type: "segment"; index: number; totalSegments: number; boundaryBefore?: GeminiBoundary; boundaryAfter?: GeminiBoundary }
+  | { type: "segmentDone"; index: number; totalSegments: number; generationId?: string; attempts?: number }
   | { type: "bytes"; totalBytes: number }
   | { type: "complete" }
   | { type: "cancelled" | "error"; message?: string };

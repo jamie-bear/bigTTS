@@ -5,6 +5,15 @@ import tls from "node:tls";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync, promises as fs } from "node:fs";
+import {
+  GEMINI_31_DEFAULT_SEGMENT_CHARS,
+  GEMINI_31_MAX_SEGMENT_CHARS,
+  buildGemini31NarrationPrompt,
+  createGeminiNarrationSegments,
+  isOpenRouterGemini31Model,
+  requestOpenRouterGemini31Speech,
+  sanitizeNarratorDirection
+} from "./server/geminiContinuity.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1008,7 +1017,15 @@ function createNarrationSession(client) {
     state.waitingForAudioDone = false;
     state.currentSegmentBytes = 0;
     state.totalBytes = 0;
-    state.segments = splitText(text, options.segmentChars, options.maxSegmentBytes);
+    state.segments = options.provider === "openrouter" && isOpenRouterGemini31Model(options.model)
+      ? createGeminiNarrationSegments(text, { targetChars: options.segmentChars })
+      : splitText(text, options.segmentChars, options.maxSegmentBytes).map((segmentText, index, segments) => ({
+          text: segmentText,
+          previousContext: "",
+          nextContext: "",
+          boundaryBefore: index === 0 ? "start" : "sentence",
+          boundaryAfter: index === segments.length - 1 ? "end" : "sentence"
+        }));
 
     sendJsonWs(client, {
       type: "meta",
@@ -1079,17 +1096,19 @@ function createNarrationSession(client) {
       type: "segment",
       index: state.segmentIndex + 1,
       totalSegments: state.segments.length,
-      chars: segment.length,
-      preview: segment.slice(0, 140)
+      chars: segment.text.length,
+      preview: segment.text.slice(0, 140),
+      boundaryBefore: segment.boundaryBefore,
+      boundaryAfter: segment.boundaryAfter
     });
 
     if (state.options.provider === "google") {
-      await synthesizeGoogleSegment(segment);
+      await synthesizeGoogleSegment(segment.text);
       return;
     }
 
     if (state.options.provider === "gemini") {
-      await synthesizeGeminiSegment(segment);
+      await synthesizeGeminiSegment(segment.text);
       return;
     }
 
@@ -1099,12 +1118,12 @@ function createNarrationSession(client) {
     }
 
     if (state.options.provider === "resemble") {
-      await synthesizeResembleSegment(segment);
+      await synthesizeResembleSegment(segment.text);
       return;
     }
 
     if (state.options.provider === "minimax") {
-      await synthesizeMiniMaxSegment(segment);
+      await synthesizeMiniMaxSegment(segment.text);
       return;
     }
 
@@ -1113,7 +1132,7 @@ function createNarrationSession(client) {
       throw new Error("xAI connection is not open.");
     }
 
-    for (const delta of splitFixed(segment, MAX_DELTA_CHARS)) {
+    for (const delta of splitFixed(segment.text, MAX_DELTA_CHARS)) {
       upstream.send(JSON.stringify({ type: "text.delta", delta }));
     }
 
@@ -1160,8 +1179,9 @@ function createNarrationSession(client) {
     state.currentRequest = controller;
 
     try {
-      const chunk = await synthesizeOpenRouterSpeech(segment, state.options, state.apiKey, controller.signal);
+      const result = await synthesizeOpenRouterSpeech(segment, state.options, state.apiKey, controller.signal);
       if (state.cancelled) return;
+      const chunk = result.audio;
 
       state.currentSegmentBytes = chunk.length;
       state.totalBytes += chunk.length;
@@ -1177,7 +1197,9 @@ function createNarrationSession(client) {
         type: "segmentDone",
         index: state.segmentIndex + 1,
         totalSegments: state.segments.length,
-        traceId: null,
+        traceId: result.generationId || null,
+        generationId: result.generationId || undefined,
+        attempts: result.attempts,
         bytes: state.currentSegmentBytes
       });
 
@@ -1435,6 +1457,7 @@ function sanitizeOptions(raw) {
   const optimizeStreamingLatency = raw.optimizeStreamingLatency ? 1 : 0;
   const textNormalization = provider === "xai" && Boolean(raw.textNormalization);
   const model = provider === "openrouter" ? String(raw.model || "").trim() : provider === "minimax" ? sanitizeMiniMaxModel(raw.model) : "";
+  const gemini31OpenRouter = provider === "openrouter" && isOpenRouterGemini31Model(model);
   const defaultSegmentChars = getDefaultSegmentChars(provider, model);
   const maxSegmentChars = getMaxSegmentChars(provider, model);
   const segmentChars = Math.round(clamp(Number(raw.segmentChars || defaultSegmentChars), MIN_SEGMENT_CHARS, maxSegmentChars));
@@ -1457,7 +1480,9 @@ function sanitizeOptions(raw) {
     segmentChars,
     maxSegmentBytes: provider === "google" ? GOOGLE_MAX_SEGMENT_BYTES : Number.POSITIVE_INFINITY,
     optimizeStreamingLatency,
-    textNormalization
+    textNormalization,
+    geminiContinuity: gemini31OpenRouter && raw.geminiContinuity !== false,
+    geminiNarratorDirection: gemini31OpenRouter ? sanitizeNarratorDirection(raw.geminiNarratorDirection) : ""
   };
 }
 
@@ -1472,13 +1497,13 @@ function sanitizeBase64Audio(value, maxLength = 6 * 1024 * 1024) {
 function getDefaultSegmentChars(provider, model = "") {
   if (provider === "google") return GOOGLE_DEFAULT_SEGMENT_CHARS;
   if (provider === "gemini") return GEMINI_DEFAULT_SEGMENT_CHARS;
-  if (provider === "openrouter" && requiresOpenRouterPcm(model)) return GEMINI_DEFAULT_SEGMENT_CHARS;
+  if (provider === "openrouter" && isOpenRouterGemini31Model(model)) return GEMINI_31_DEFAULT_SEGMENT_CHARS;
   return DEFAULT_SEGMENT_CHARS;
 }
 
 function getMaxSegmentChars(provider, model = "") {
   if (provider === "google") return GOOGLE_MAX_SEGMENT_CHARS;
-  if (provider === "openrouter" && requiresOpenRouterPcm(model)) return GOOGLE_MAX_SEGMENT_CHARS;
+  if (provider === "openrouter" && isOpenRouterGemini31Model(model)) return GEMINI_31_MAX_SEGMENT_CHARS;
   return MAX_SEGMENT_CHARS;
 }
 
@@ -1636,10 +1661,29 @@ async function synthesizeResembleSpeech(text, options, apiKey, signal) {
   return extractLinear16Pcm(Buffer.from(body.audio_content, "base64"));
 }
 
-async function synthesizeOpenRouterSpeech(text, options, apiKey, signal) {
+async function synthesizeOpenRouterSpeech(segment, options, apiKey, signal) {
   const trimmedApiKey = String(apiKey || "").trim();
   if (!trimmedApiKey) {
     throw new Error("Add your OpenRouter API key before starting narration.");
+  }
+
+  if (isOpenRouterGemini31Model(options.model)) {
+    const result = await requestOpenRouterGemini31Speech({
+      url: OPENROUTER_TTS_URL,
+      apiKey: trimmedApiKey,
+      voice: options.voice,
+      input: buildGemini31NarrationPrompt(segment, {
+        speed: options.speed,
+        enhancedContinuity: options.geminiContinuity,
+        narratorDirection: options.geminiNarratorDirection
+      }),
+      signal
+    });
+    return {
+      audio: Buffer.from(result.audio.buffer, result.audio.byteOffset, result.audio.byteLength),
+      generationId: result.generationId,
+      attempts: result.attempts
+    };
   }
 
   const response = await fetch(OPENROUTER_TTS_URL, {
@@ -1651,7 +1695,7 @@ async function synthesizeOpenRouterSpeech(text, options, apiKey, signal) {
     },
     body: JSON.stringify({
       model: options.model,
-      input: requiresOpenRouterPcm(options.model) ? buildGeminiPrompt(text, options) : text,
+      input: requiresOpenRouterPcm(options.model) ? buildGeminiPrompt(segment.text, options) : segment.text,
       voice: options.voice,
       response_format: getOpenRouterResponseFormat(options.model),
       speed: options.speed
@@ -1665,7 +1709,11 @@ async function synthesizeOpenRouterSpeech(text, options, apiKey, signal) {
   }
 
   const audio = Buffer.from(await response.arrayBuffer());
-  return requiresOpenRouterPcm(options.model) ? extractLinear16Pcm(audio) : audio;
+  return {
+    audio: requiresOpenRouterPcm(options.model) ? extractLinear16Pcm(audio) : audio,
+    generationId: response.headers.get("x-generation-id") || "",
+    attempts: 1
+  };
 }
 
 async function readErrorResponse(response) {

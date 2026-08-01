@@ -85,6 +85,27 @@ describe("bigTTS application shell", () => {
     expect(screen.queryByText("Manage voice clones")).not.toBeInTheDocument();
   });
 
+  it("shows and persists advanced continuity controls for OpenRouter Gemini 3.1 only", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google-oauth/status")) return new Response(JSON.stringify({ configured: false, connected: false }), { status: 200 });
+      if (url.includes("provider/balance")) return new Response(JSON.stringify({ available: false, updatedAt: new Date().toISOString() }), { status: 200 });
+      if (url.includes("openrouter/models")) return new Response(JSON.stringify({ models: [{ id: "google/gemini-3.1-flash-tts-preview", name: "Gemini 3.1 Flash TTS Preview", voices: [{ value: "Kore", label: "Kore" }] }] }), { status: 200 });
+      return new Response(JSON.stringify({ voices: [] }), { status: 200 });
+    });
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("OpenRouter API key"), { target: { value: "test-key" } });
+    await waitFor(() => expect(screen.getByLabelText("OpenRouter model")).toHaveValue("google/gemini-3.1-flash-tts-preview"), { timeout: 1500 });
+    expect(screen.getByLabelText("Segment target")).toHaveValue("1200");
+    expect(screen.getByRole("option", { name: "Long" })).toBeDisabled();
+    const enhanced = screen.getByLabelText("Enhanced continuity");
+    expect(enhanced).toBeChecked();
+    fireEvent.click(enhanced);
+    fireEvent.change(screen.getByLabelText(/Narrator direction/), { target: { value: "Warm and restrained." } });
+    expect(sessionStorage.getItem("openrouterGeminiContinuity")).toBe("false");
+    expect(sessionStorage.getItem("openrouterGeminiNarratorDirection")).toBe("Warm and restrained.");
+  });
+
   it("keeps MiniMax voice management inside Voice & synthesis with distinct add, rename, and delete flows", async () => {
     localStorage.setItem("minimaxVoiceClones", JSON.stringify([{ id: "narrator-1", name: "Original narrator", model: "speech-2.8-hd" }]));
     render(<App />);

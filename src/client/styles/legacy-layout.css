@@ -205,6 +205,14 @@ input[type="range"] { width: 100%; accent-color: var(--color-action); }
 .unavailable-capabilities > summary > span:last-child { display: inline-grid; min-width: 20px; height: 20px; place-items: center; border-radius: 999px; background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 10px; }
 .unavailable-capability-list { display: grid; gap: 9px; padding: 0 9px 9px; }
 .unavailable-capability-list .capability { background: var(--color-surface); }
+.gemini-continuity-panel { border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-subtle); }
+.gemini-continuity-panel > summary { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 12px; cursor: pointer; color: var(--color-text); font-size: 12px; font-weight: 680; }
+.gemini-continuity-panel > summary > span:last-child { color: var(--color-action); font-size: 10px; text-transform: uppercase; }
+.gemini-continuity-settings { display: grid; gap: 8px; padding: 0 12px 12px; }
+.gemini-continuity-settings > small { color: var(--color-text-muted); font-size: 11px; }
+.gemini-continuity-settings > label:not(.checkline) { display: grid; gap: 5px; margin-top: 4px; color: var(--color-text); font-size: 12px; font-weight: 650; }
+.gemini-continuity-settings em { color: var(--color-text-faint); font-size: 10px; font-style: normal; font-weight: 500; }
+textarea.gemini-direction { min-height: 94px; resize: vertical; padding: 10px 12px; font-family: inherit; font-size: 12px; line-height: 1.45; }
 
 .phase-badge { display: inline-flex; align-items: center; border-radius: 999px; background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 10px; font-weight: 750; letter-spacing: .04em; padding: 5px 8px; text-transform: uppercase; }
 .phase-generating, .phase-connecting { background: var(--color-action-soft); color: var(--color-action); }

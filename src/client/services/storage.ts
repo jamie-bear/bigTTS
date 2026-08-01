@@ -4,6 +4,8 @@ import type { ProviderId, VoiceClone } from "../types/contracts";
 export const STORAGE_KEYS = {
   provider: "ttsProvider",
   openrouterModel: "openrouterModel",
+  geminiContinuity: "openrouterGeminiContinuity",
+  geminiNarratorDirection: "openrouterGeminiNarratorDirection",
   minimaxModel: "minimaxModel",
   minimaxVoiceClones: "minimaxVoiceClones"
 } as const;
