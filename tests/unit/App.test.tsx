@@ -87,6 +87,21 @@ describe("bigTTS application shell", () => {
     expect(screen.queryByText("Manage voice clones")).not.toBeInTheDocument();
   });
 
+  it("hides the provider balance when the API does not expose an amount", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google-oauth/status")) return new Response(JSON.stringify({ configured: false, connected: false }), { status: 200 });
+      if (url.includes("provider/balance")) return new Response(JSON.stringify({ available: false, message: "Balance unavailable", updatedAt: new Date().toISOString() }), { status: 200 });
+      return new Response(JSON.stringify({ models: [], voices: [] }), { status: 200 });
+    });
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("OpenRouter API key"), { target: { value: "test-key" } });
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("provider/balance"), expect.anything()), { timeout: 1500 });
+    expect(screen.queryByLabelText("Provider balance")).not.toBeInTheDocument();
+    expect(screen.queryByText("Balance unavailable")).not.toBeInTheDocument();
+  });
+
   it("shows and persists advanced continuity controls for OpenRouter Gemini 3.1 only", async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);

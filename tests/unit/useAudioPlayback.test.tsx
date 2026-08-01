@@ -82,4 +82,21 @@ describe("useAudioPlayback", () => {
     // AudioEngine performs at a segment boundary; without this, the choice reverts to 1x.
     expect(audio.defaultPlaybackRate).toBe(1.5);
   });
+
+  it("restores the chosen speed when a source reload publishes a transient rate", () => {
+    render(<Probe />);
+    const audio = screen.getByTestId("audio") as HTMLAudioElement;
+
+    fireEvent.click(screen.getByRole("button", { name: "set rate" }));
+
+    // Browsers can expose a restored rate while AudioEngine replaces the source. The
+    // resulting media event must not turn that transient value into the selected speed.
+    audio.defaultPlaybackRate = 0.75;
+    audio.playbackRate = 0.75;
+    fireEvent(audio, new Event("emptied"));
+
+    expect(screen.getByTestId("rate")).toHaveTextContent("1.5");
+    expect(audio.defaultPlaybackRate).toBe(1.5);
+    expect(audio.playbackRate).toBe(1.5);
+  });
 });

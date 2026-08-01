@@ -64,6 +64,7 @@ function isSame(a: AudioPlaybackState, b: AudioPlaybackState) {
 export function useAudioPlayback(audioRef: RefObject<HTMLAudioElement | null>) {
   const [playback, setPlayback] = useState<AudioPlaybackState>(IDLE);
   const syncRef = useRef<() => void>(() => {});
+  const selectedRateRef = useRef(IDLE.rate);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -72,6 +73,12 @@ export function useAudioPlayback(audioRef: RefObject<HTMLAudioElement | null>) {
     let disposed = false;
 
     const sync = () => setPlayback((previous) => {
+      // Source replacement can make the media element briefly publish its restored rate.
+      // Keep the user's choice as the source of truth instead of adopting that transient
+      // value through a ratechange/emptied/loadedmetadata event.
+      const selectedRate = selectedRateRef.current;
+      if (audio.defaultPlaybackRate !== selectedRate) audio.defaultPlaybackRate = selectedRate;
+      if (audio.playbackRate !== selectedRate) audio.playbackRate = selectedRate;
       const next = readAudio(audio);
       return isSame(previous, next) ? previous : next;
     });
@@ -149,6 +156,7 @@ export function useAudioPlayback(audioRef: RefObject<HTMLAudioElement | null>) {
   const setRate = useCallback((value: number) => {
     const audio = audioRef.current;
     if (!audio || !Number.isFinite(value) || value <= 0) return;
+    selectedRateRef.current = value;
     // AudioEngine reloads the element at every segment boundary; the load algorithm resets
     // playbackRate to defaultPlaybackRate, so both must be set or the choice keeps reverting.
     audio.defaultPlaybackRate = value;
