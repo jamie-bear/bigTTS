@@ -59,13 +59,20 @@ describe("NarrationSession", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("sends pause and resume commands without closing the session", () => {
+  it("sends pause, resume, retry, and skip commands without closing the session", () => {
     const session = new NarrationSession({ onOpen: vi.fn(), onEvent: vi.fn(), onAudio: vi.fn(), onClose: vi.fn(), onError: vi.fn() });
     session.start(command, () => ({ paused: false, bufferedAheadSeconds: 0 }));
     MockWebSocket.instance.dispatchEvent(new Event("open"));
     session.pause();
     session.resume();
-    expect(MockWebSocket.instance.sent.slice(-2).map((value) => JSON.parse(value))).toEqual([{ type: "pause" }, { type: "resume" }]);
+    session.retrySegment();
+    session.skipSegment();
+    expect(MockWebSocket.instance.sent.slice(-4).map((value) => JSON.parse(value))).toEqual([
+      { type: "pause" },
+      { type: "resume" },
+      { type: "retrySegment" },
+      { type: "skipSegment" }
+    ]);
     expect(MockWebSocket.instance.readyState).toBe(MockWebSocket.OPEN);
     session.dispose();
   });

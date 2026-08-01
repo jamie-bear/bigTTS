@@ -40,7 +40,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
         if (phase !== "completed" && phase !== "stopped" && phase !== "error" && phase !== "paused" && phase !== "recoverable") setStatus(message);
       },
       onBufferChange: (bufferSeconds) => dispatch({ type: "patch", patch: { bufferSeconds } }),
-      onLevel: () => dispatch({ type: "patch", patch: { waveformLevel: performance.now() } }),
+      onLevel: () => { /* No waveform display; AudioEngine's callback contract stays unchanged. */ },
       onAudioAvailable: () => dispatch({ type: "patch", patch: { audioAvailable: true } })
     });
     return () => {

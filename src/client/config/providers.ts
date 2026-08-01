@@ -125,6 +125,6 @@ export function knownModelVoiceGender(modelId: string, voice: string) {
 export function activeSegmentLimits(provider: ProviderId, model: string) {
   const config = PROVIDERS[provider];
   return provider === "openrouter" && isOpenRouterGemini31Model(model)
-    ? { defaultSegmentChars: 1200, maxSegmentChars: 2500 }
+    ? { defaultSegmentChars: 500, maxSegmentChars: 2500 }
     : { defaultSegmentChars: config.defaultSegmentChars, maxSegmentChars: config.maxSegmentChars };
 }

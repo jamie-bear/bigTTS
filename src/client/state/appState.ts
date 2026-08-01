@@ -32,7 +32,6 @@ export interface AppState {
   totalSegments: number;
   progress: number;
   bufferSeconds: number;
-  waveformLevel: number;
   stitchedAudio: StitchedAudio | null;
   audioAvailable: boolean;
   segmentFailure: SegmentFailure | null;
@@ -77,7 +76,6 @@ export function createInitialState(): AppState {
     totalSegments: 0,
     progress: 0,
     bufferSeconds: 0,
-    waveformLevel: 0,
     stitchedAudio: null,
     audioAvailable: false,
     segmentFailure: null,

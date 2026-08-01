@@ -8,6 +8,7 @@ import {
   requestOpenRouterGemini31Speech,
   sanitizeNarratorDirection
 } from "../../src/server/geminiContinuity.js";
+import { openRouterErrorDetails } from "../../src/server/openRouterSpeech.js";
 
 describe("OpenRouter Gemini 3.1 continuity", () => {
   it("activates only for the exact model identifier", () => {
@@ -140,15 +141,55 @@ describe("OpenRouter Gemini 3.1 continuity", () => {
     await expect(requestOpenRouterGemini31Speech({ url: "test", apiKey: "test", voice: "Kore", input: "Prompt", fetchImpl: oddFetch, maxAttempts: 1 })).rejects.toThrow(/odd-length/i);
   });
 
-  it("does not retry rate limits and respects cancellation", async () => {
-    const rateLimited = vi.fn(async () => new Response("rate limited", { status: 429 }));
-    await expect(requestOpenRouterGemini31Speech({ url: "test", apiKey: "test", voice: "Kore", input: "Prompt", fetchImpl: rateLimited })).rejects.toThrow(/rate limited/i);
-    expect(rateLimited).toHaveBeenCalledOnce();
+  it("retries rate limits, honors Retry-After, and respects cancellation", async () => {
+    const rateLimited = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "rate limited", metadata: { error_type: "rate_limit_exceeded" } } }), { status: 429, headers: { "Retry-After": "2" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([0, 0]), { status: 200, headers: { "content-type": "audio/pcm" } }));
+    const sleep = vi.fn(async () => undefined);
+    await expect(requestOpenRouterGemini31Speech({ url: "test", apiKey: "test", voice: "Kore", input: "Prompt", fetchImpl: rateLimited, sleep })).resolves.toMatchObject({ attempts: 2 });
+    expect(rateLimited).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(2_000, undefined);
     const controller = new AbortController();
     controller.abort();
     const neverCalled = vi.fn();
     await expect(requestOpenRouterGemini31Speech({ url: "test", apiKey: "test", voice: "Kore", input: "Prompt", fetchImpl: neverCalled, signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
     expect(neverCalled).not.toHaveBeenCalled();
+  });
+
+  it("preserves typed provider diagnostics for non-retryable segment errors", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      error: {
+        code: 400,
+        message: "Provider returned 400",
+        metadata: {
+          error_type: "content_policy_violation",
+          provider_code: "PROHIBITED_CONTENT",
+          provider_name: "Google AI Studio",
+          reasons: ["prompt classifier"],
+          flagged_input: "flagged excerpt"
+        }
+      }
+    }), { status: 400, headers: { "x-request-id": "req-123" } }));
+
+    let failure;
+    try {
+      await requestOpenRouterGemini31Speech({ url: "test", apiKey: "test", voice: "Kore", input: "Prompt", fetchImpl });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(openRouterErrorDetails(failure)).toEqual({
+      status: 400,
+      code: "400",
+      errorType: "content_policy_violation",
+      providerCode: "PROHIBITED_CONTENT",
+      providerName: "Google AI Studio",
+      reasons: ["prompt classifier"],
+      flaggedInput: "flagged excerpt",
+      requestId: "req-123",
+      attempts: 1
+    });
   });
 });
 

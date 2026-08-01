@@ -1,5 +1,5 @@
 :focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--color-action) 28%, transparent);
+  outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -19,5 +19,9 @@
   *, *::before, *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
+
+  .progress-rail.is-indeterminate::after { display: none; }
 }

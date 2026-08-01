@@ -27,6 +27,13 @@ const options = {
   geminiNarratorDirection: ""
 };
 
+const openRouterOptions = {
+  ...options,
+  provider: "openrouter",
+  model: "google/gemini-3.1-flash-tts-preview",
+  geminiContinuity: true
+};
+
 const response = () => new Response(JSON.stringify({
   candidates: [{ content: { parts: [{ inlineData: { data: "AQIDBA==" } }] } }]
 }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -78,5 +85,55 @@ describe("server narration pause state", () => {
     expect(client.events("resumed")).toHaveLength(1);
     expect(client.events("segment").at(-1).index).toBe(2);
     session.cancel("Test finished.");
+  });
+
+  it("keeps a rejected OpenRouter segment recoverable and retries it in place", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: {
+          code: 400,
+          message: "Provider returned 400",
+          metadata: { error_type: "content_policy_violation", provider_code: "PROHIBITED_CONTENT" }
+        }
+      }), { status: 400, headers: { "x-request-id": "req-failed" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([0, 0, 1, 0]), { status: 200, headers: { "Content-Type": "audio/pcm", "x-generation-id": "gen-retried" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new FakeClient();
+    const session = createNarrationSession(client);
+
+    session.handleClientMessage({ type: "start", apiKey: "test-key", text: "A segment that needs another attempt.", options: openRouterOptions });
+    await vi.waitFor(() => expect(client.events("segmentFailed")).toHaveLength(1));
+    expect(client.events("segmentFailed")[0]).toMatchObject({
+      index: 1,
+      message: "OpenRouter TTS request failed: Provider returned 400",
+      details: {
+        status: 400,
+        errorType: "content_policy_violation",
+        providerCode: "PROHIBITED_CONTENT",
+        requestId: "req-failed",
+        attempts: 1
+      }
+    });
+    expect(client.events("error")).toHaveLength(0);
+
+    session.handleClientMessage({ type: "retrySegment" });
+    await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(client.events("segmentRetrying")[0].index).toBe(1);
+    expect(client.events("segmentDone")[0]).toMatchObject({ index: 1, generationId: "gen-retried" });
+  });
+
+  it("can skip a rejected OpenRouter segment without ending the session", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { code: 400, message: "Provider returned 400" } }), { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new FakeClient();
+    const session = createNarrationSession(client);
+
+    session.handleClientMessage({ type: "start", apiKey: "test-key", text: "A rejected final segment.", options: openRouterOptions });
+    await vi.waitFor(() => expect(client.events("segmentFailed")).toHaveLength(1));
+    session.handleClientMessage({ type: "skipSegment" });
+    await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
+    expect(client.events("segmentSkipped")[0]).toMatchObject({ index: 1, totalSegments: 1 });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

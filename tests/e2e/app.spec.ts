@@ -28,17 +28,37 @@ test.beforeEach(async ({ page, context }) => {
         socket.send(JSON.stringify({ type: "complete" }));
         return;
       }
+      if (command.type === "retrySegment" && narrationText === "recovery-flow") {
+        socket.send(JSON.stringify({ type: "segmentRetrying", index: 2, totalSegments: 2 }));
+        socket.send(JSON.stringify({ type: "segment", index: 2, totalSegments: 2 }));
+        socket.send(Buffer.from([0xff, 0xfb, 0x90, 0x65]));
+        socket.send(JSON.stringify({ type: "segmentDone", index: 2, totalSegments: 2, generationId: "gen-retried", attempts: 1 }));
+        socket.send(JSON.stringify({ type: "complete" }));
+        return;
+      }
       if (command.type === "start") {
         narrationText = command.text;
         if (command.text === "inspect-gemini-options") {
           socket.send(JSON.stringify({ type: "status", message: `continuity=${command.options.geminiContinuity}; direction=${command.options.geminiNarratorDirection}` }));
           return;
         }
-        const totalSegments = command.text === "pause-flow" ? 2 : 1;
+        const totalSegments = command.text === "pause-flow" || command.text === "recovery-flow" ? 2 : 1;
         socket.send(JSON.stringify({ type: "meta", provider: command.options.provider, audioEncoding: "mpeg", sampleRate: 24000, channels: 1, totalChars: 11, totalSegments, segmentChars: command.options.segmentChars }));
         socket.send(JSON.stringify({ type: "segment", index: 1, totalSegments }));
         socket.send(Buffer.from([0xff, 0xfb, 0x90, 0x64]));
         if (command.text === "partial" || command.text === "pause-flow") return;
+        if (command.text === "recovery-flow") {
+          socket.send(JSON.stringify({ type: "segmentDone", index: 1, totalSegments: 2 }));
+          socket.send(JSON.stringify({ type: "segment", index: 2, totalSegments: 2 }));
+          socket.send(JSON.stringify({
+            type: "segmentFailed",
+            index: 2,
+            totalSegments: 2,
+            message: "OpenRouter TTS request failed: Provider returned 400",
+            details: { status: 400, errorType: "content_policy_violation", providerCode: "PROHIBITED_CONTENT", requestId: "req-123", attempts: 1 }
+          }));
+          return;
+        }
         socket.send(JSON.stringify({ type: "segmentDone", index: 1, totalSegments: 1 }));
         socket.send(JSON.stringify({ type: "complete" }));
       }
@@ -89,6 +109,19 @@ test("matches the visual-parity baseline", async ({ page }) => {
   });
 });
 
+test("pins a dark theme from the header toggle", async ({ page }) => {
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.*/);
+  await page.getByRole("button", { name: "Theme: System" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Theme: Light" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page).toHaveScreenshot("app-shell-dark.png", {
+    fullPage: true,
+    animations: "disabled",
+    maxDiffPixelRatio: 0.002
+  });
+});
+
 for (const provider of ["openrouter", "minimax", "xai", "gemini", "google", "resemble"] as const) {
   test(`${provider} retains its provider-specific controls`, async ({ page }) => {
     await page.getByLabel("Provider", { exact: true }).selectOption(provider);
@@ -123,7 +156,7 @@ test("configures and serializes OpenRouter Gemini 3.1 continuity", async ({ page
   await page.route("**/api/openrouter/models", (route) => route.fulfill({ json: { models: [{ id: "google/gemini-3.1-flash-tts-preview", name: "Gemini 3.1 Flash TTS Preview", voices: [{ value: "Kore", label: "Kore" }] }] } }));
   await page.getByLabel("OpenRouter API key").fill("test-key");
   await expect(page.getByLabel("OpenRouter model")).toHaveValue("google/gemini-3.1-flash-tts-preview");
-  await expect(page.getByLabel("Segment target")).toHaveValue("1200");
+  await expect(page.getByLabel("Segment target")).toHaveValue("500");
   await page.getByText("Gemini continuity", { exact: true }).click();
   await expect(page.getByLabel("Enhanced continuity")).toBeChecked();
   await page.getByLabel("Narrator direction").fill("Warm and restrained.");
@@ -159,6 +192,28 @@ test("pauses generation at a segment boundary and resumes with the next segment"
   await expect(page.getByRole("button", { name: "Start narration" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Stop" })).toBeEnabled();
   await page.getByRole("button", { name: "Resume generation" }).click();
+  await expect(page.getByText("Narration fully generated. Continuous MP3 ready.")).toBeVisible();
+  await expect(page.getByText("2 / 2 segments")).toBeVisible();
+});
+
+test("shows provider diagnostics and retries a rejected segment without restarting", async ({ page }) => {
+  await page.getByLabel("OpenRouter API key").fill("test-key");
+  await expect(page.getByLabel("OpenRouter model")).toBeEnabled();
+  await page.getByLabel("Book or chapter text").fill("recovery-flow");
+  await page.getByRole("button", { name: "Start narration" }).click();
+
+  const failure = page.getByRole("alert");
+  await expect(failure.getByText("Segment 2 was rejected")).toBeVisible();
+  await expect(page.getByText("2 / 2 segments")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start narration" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stop" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Download partial MP3" })).toBeEnabled();
+
+  await failure.getByText("Provider diagnostics").click();
+  await expect(failure.getByText("content_policy_violation")).toBeVisible();
+  await expect(failure.getByText("PROHIBITED_CONTENT")).toBeVisible();
+  await page.getByRole("button", { name: "Retry segment" }).click();
+
   await expect(page.getByText("Narration fully generated. Continuous MP3 ready.")).toBeVisible();
   await expect(page.getByText("2 / 2 segments")).toBeVisible();
 });

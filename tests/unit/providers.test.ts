@@ -10,7 +10,7 @@ describe("provider registry", () => {
     expect(isOpenRouterPcmModel("google/gemini-tts")).toBe(true);
     expect(isOpenRouterGemini31Model(OPENROUTER_GEMINI_31_TTS_MODEL)).toBe(true);
     expect(isOpenRouterGemini31Model("google/gemini-tts")).toBe(false);
-    expect(activeSegmentLimits("openrouter", OPENROUTER_GEMINI_31_TTS_MODEL)).toEqual({ defaultSegmentChars: 1200, maxSegmentChars: 2500 });
+    expect(activeSegmentLimits("openrouter", OPENROUTER_GEMINI_31_TTS_MODEL)).toEqual({ defaultSegmentChars: 500, maxSegmentChars: 2500 });
     expect(activeSegmentLimits("openrouter", "google/gemini-tts")).toEqual({ defaultSegmentChars: 2500, maxSegmentChars: 12000 });
     expect(activeSegmentLimits("openrouter", "mistral/voxtral-mini-tts")).toEqual({ defaultSegmentChars: 2500, maxSegmentChars: 12000 });
     expect(PROVIDERS.gemini.defaultSegmentChars).toBe(500);

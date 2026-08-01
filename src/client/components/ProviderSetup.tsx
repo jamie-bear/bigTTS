@@ -17,7 +17,6 @@ export function ProviderSetup({ controller }: { controller: Controller }) {
       </select>{providerConfig.accessDescription && <small className="field-help">{providerConfig.accessDescription}</small>}</div>
       {usesKey && <div className="credential-block">
         {remembered ? <div className="credential-saved">
-          <Icon name="check" />
           <Checkbox id="rememberKey" label={`${providerConfig.credentialLabel} kept for this browser session`} checked onChange={(event) => actions.setRememberCredential(event.target.checked)} />
         </div> : <div className="credential-entry">
           <label id="apiKeyLabel" className="field" htmlFor="apiKey"><span className="field-label">{providerConfig.credentialLabel}</span>
@@ -53,16 +52,20 @@ function ProviderBalance({ controller }: { controller: Controller }) {
   const { state } = controller;
   const balance = state.providerBalance;
   const credential = state.credentials[state.provider].trim();
+  const amount = balance?.available && typeof balance.amount === "number" ? balance.amount : null;
+  const status = !credential ? "idle" : state.balanceLoading ? "checking" : amount !== null ? "available" : "unavailable";
   const value = !credential
     ? "Enter an API key"
     : state.balanceLoading
       ? "Checking..."
-      : balance?.available && typeof balance.amount === "number"
-        ? new Intl.NumberFormat(undefined, { style: "currency", currency: balance.currency || "USD" }).format(balance.amount)
+      : amount !== null
+        ? new Intl.NumberFormat(undefined, { style: "currency", currency: balance?.currency || "USD" }).format(amount)
         : "Unavailable";
   const detail = state.balanceError || balance?.message || (balance?.updatedAt ? `Updated ${new Date(balance.updatedAt).toLocaleTimeString()}` : "Refreshes after every generated segment.");
   return <div className="provider-balance" aria-label="Provider balance" aria-live="polite">
-    <span>Available balance</span><strong>{value}</strong><small>{detail}</small>
+    <div className="balance-head"><span className={`status-dot status-${status}`} aria-hidden="true" /><span>Available balance</span></div>
+    <strong className="balance-value">{value}</strong>
+    <small className="balance-detail">{detail}</small>
   </div>;
 }
 

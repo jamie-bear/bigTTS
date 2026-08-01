@@ -3,9 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f7f2" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f6f7f9" />
     <link rel="icon" type="image/png" href="/src/logo.png" />
     <title>bigTTS</title>
+    <script>
+      // Resolve the theme before first paint so there is no flash of the wrong palette.
+      // An explicit choice pins data-theme; "system" leaves it unset for the CSS media fallback.
+      (function () {
+        try {
+          var stored = localStorage.getItem("bigtts.theme");
+          if (stored === "light" || stored === "dark") document.documentElement.dataset.theme = stored;
+          var dark = stored === "dark" || (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#0b0e13" : "#f6f7f9");
+        } catch (error) {
+          /* Storage or matchMedia unavailable — the CSS media fallback still applies. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

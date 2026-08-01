@@ -1,24 +1,149 @@
+/* Semantic design tokens. Colour tokens are defined per theme; scales are theme-independent. */
+
 :root {
+  /* Spacing — 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* Radii */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+
+  /* Type */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 19px;
+  --text-2xl: clamp(22px, 2vw, 28px);
+  --weight-medium: 500;
+  --weight-semibold: 620;
+  --weight-bold: 720;
+
+  /* Motion */
+  --motion-fast: 120ms;
+  --motion-base: 220ms;
+  --ease-out: cubic-bezier(0.22, 0.7, 0.28, 1);
+}
+
+/* Light — the default palette. */
+:root,
+:root[data-theme="light"] {
   color-scheme: light;
-  --color-canvas: #f4f6f8;
+
+  --color-canvas: #f6f7f9;
   --color-surface: #ffffff;
-  --color-surface-subtle: #f8fafc;
-  --color-surface-muted: #eef2f6;
-  --color-text: #15202b;
-  --color-text-muted: #647180;
-  --color-text-faint: #8793a1;
-  --color-border: #dce2e8;
-  --color-border-strong: #c8d0d9;
-  --color-action: #3157d5;
-  --color-action-hover: #2545b7;
-  --color-action-soft: #eef2ff;
-  --color-success: #18794e;
-  --color-success-soft: #edf8f2;
-  --color-warning: #9a6700;
-  --color-danger: #c53030;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --shadow-card: 0 1px 2px rgba(20, 32, 43, 0.04), 0 8px 24px rgba(20, 32, 43, 0.04);
-  --motion-fast: 140ms;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #f8fafc;
+  --color-surface-muted: #eef1f5;
+  --color-border-subtle: #e6eaef;
+  --color-border: #d8dee6;
+  --color-border-strong: #c3ccd6;
+  --color-text: #111820;
+  --color-text-muted: #5b6673;
+  --color-text-faint: #8390a0;
+  --color-accent: #2f5ae0;
+  --color-accent-solid: #2f5ae0;
+  --color-accent-solid-hover: #2449c4;
+  --color-on-accent: #ffffff;
+  --color-accent-soft: #eef2ff;
+  --color-success: #0f7a4d;
+  --color-success-soft: #e8f7ef;
+  --color-warning: #8a5a00;
+  --color-warning-soft: #fff6e5;
+  --color-danger: #c62b2b;
+  --color-danger-soft: #fdeeee;
+
+  --shadow-xs: 0 1px 2px rgba(17, 24, 32, 0.05);
+  --shadow-sm: 0 1px 2px rgba(17, 24, 32, 0.04), 0 4px 12px rgba(17, 24, 32, 0.05);
+  --shadow-md: 0 2px 4px rgba(17, 24, 32, 0.05), 0 14px 34px rgba(17, 24, 32, 0.08);
+  --shadow-highlight: 0 0 0 0 transparent;
+
+  --focus-ring: color-mix(in srgb, var(--color-accent) 38%, transparent);
+}
+
+/* Dark — drop shadows read poorly on dark, so spread is tighter, alpha higher,
+   and cards gain a hairline top highlight to separate them from the canvas. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-canvas: #0b0e13;
+  --color-surface: #131820;
+  --color-surface-raised: #1a212b;
+  --color-surface-sunken: #0f141b;
+  --color-surface-muted: #222b37;
+  --color-border-subtle: #1f2833;
+  --color-border: #2b3542;
+  --color-border-strong: #3b4756;
+  --color-text: #e8edf4;
+  --color-text-muted: #9aa6b4;
+  --color-text-faint: #71808f;
+  --color-accent: #8aa6ff;
+  --color-accent-solid: #3f6dfa;
+  --color-accent-solid-hover: #5580ff;
+  --color-on-accent: #ffffff;
+  --color-accent-soft: #1a2340;
+  --color-success: #4ec98a;
+  --color-success-soft: #132a20;
+  --color-warning: #e3b341;
+  --color-warning-soft: #2c2413;
+  --color-danger: #ff7b72;
+  --color-danger-soft: #2d1618;
+
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.55), 0 8px 18px rgba(0, 0, 0, 0.42);
+  --shadow-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
+  --focus-ring: color-mix(in srgb, var(--color-accent) 52%, transparent);
+}
+
+/* No-JS / pre-choice fallback: follow the OS until an explicit theme is set. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --color-canvas: #0b0e13;
+    --color-surface: #131820;
+    --color-surface-raised: #1a212b;
+    --color-surface-sunken: #0f141b;
+    --color-surface-muted: #222b37;
+    --color-border-subtle: #1f2833;
+    --color-border: #2b3542;
+    --color-border-strong: #3b4756;
+    --color-text: #e8edf4;
+    --color-text-muted: #9aa6b4;
+    --color-text-faint: #71808f;
+    --color-accent: #8aa6ff;
+    --color-accent-solid: #3f6dfa;
+    --color-accent-solid-hover: #5580ff;
+    --color-on-accent: #ffffff;
+    --color-accent-soft: #1a2340;
+    --color-success: #4ec98a;
+    --color-success-soft: #132a20;
+    --color-warning: #e3b341;
+    --color-warning-soft: #2c2413;
+    --color-danger: #ff7b72;
+    --color-danger-soft: #2d1618;
+
+    --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.45);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.55), 0 8px 18px rgba(0, 0, 0, 0.42);
+    --shadow-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
+    --focus-ring: color-mix(in srgb, var(--color-accent) 52%, transparent);
+  }
 }

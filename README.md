@@ -14,6 +14,7 @@ The frontend uses React, TypeScript, and Vite. Provider configuration, persisten
 - Generates every segment sequentially after narration starts, independent of playback position, while still streaming audio for listening.
 - Expands the player into a cumulative seekable timeline after each completed segment, preserving the listener's position as more audio arrives and staging source updates so active playback is never interrupted.
 - Pauses generation safely after the in-flight segment finishes and resumes with the next segment, without pausing audio playback.
+- Retries transient OpenRouter failures with backoff and keeps rejected segments recoverable, exposing provider diagnostics plus retry and skip actions without discarding completed audio.
 - Supports OpenRouter speech models, Gemini TTS voices through Google Cloud TTS, built-in xAI voices, MiniMax and Resemble.ai custom voices, language selection where available, speed controls, low-latency xAI options, and xAI text normalization.
 - Displays the selected provider's current balance when its synthesis credential exposes one, and refreshes it after every completed segment.
 - Automatically stitches completed segments into one continuous MP3 or WAV download after generation finishes.
@@ -93,7 +94,9 @@ Frontend source is organized under `src/client`:
 - `config` is the single source of truth for provider capabilities and options.
 - `state` and `hooks` own reducer-driven application behavior.
 - `services` isolate storage, REST/OAuth, WebSocket, playback, and download logic.
-- `styles` exposes semantic tokens while retaining the current presentation.
+- `styles` is a token-driven stylesheet set: `tokens.css` (light and dark palettes plus the spacing, radius, type, shadow and motion scales), then `base`, `layout`, `panels`, `controls`, `player` and `accessibility`, composed in that order by `index.css`.
+
+Dark mode follows `prefers-color-scheme` until the header toggle pins a choice; the selection persists in `localStorage["bigtts.theme"]` and is applied before first paint by a small inline script in `index.html`.
 
 ## Google OAuth Setup
 
@@ -116,7 +119,7 @@ If your OAuth consent screen is in testing mode, add your Google account as a te
 
 OpenRouter uses `https://openrouter.ai/api/v1/audio/speech` for speech generation and `https://openrouter.ai/api/v1/models?output_modalities=speech` for model discovery. Every discovered model uses the built-in voice selection and speech-generation flow. The exact `google/gemini-3.1-flash-tts-preview` model additionally uses multilingual semantic segmentation, stable audiobook direction, and optional silent context from adjacent segments. The app checks `https://openrouter.ai/api/v1/key` for the selected key's remaining credit limit; keys without a configured limit do not expose an account balance through that endpoint.
 
-OpenRouter Gemini 3.1 defaults to a 1,200-character semantic target and a 2,500-character hard maximum. These are targets rather than fixed cuts: the segmenter preserves sentence separators, prefers paragraph and chapter boundaries, attaches short headings to following prose, and rebalances short tails. Enhanced continuity is enabled by default and can be disabled under **Gemini continuity**. An optional narrator direction is repeated consistently across requests and stored only for the browser session.
+OpenRouter Gemini 3.1 defaults to a 500-character semantic target (the **Very short** setting) and a 2,500-character hard maximum. These are targets rather than fixed cuts: the segmenter preserves sentence separators, prefers paragraph and chapter boundaries, attaches short headings to following prose, and rebalances short tails. Enhanced continuity is enabled by default and can be disabled under **Gemini continuity**. An optional narrator direction is repeated consistently across requests and stored only for the browser session.
 
 Gemini 3.1 pace is expressed in the director prompt because OpenRouter's generic `speed` field is not supported by every TTS provider. The model returns 24 kHz, 16-bit mono PCM. Successful responses are validated without filtering or normalizing the audio; transient preview-model failures are retried up to twice. The generation ID is retained in narration diagnostics. Waveform crossfading and a Web Audio playback scheduler remain intentionally out of scope, so this release improves tonal and prosodic continuity rather than mechanically editing boundaries.
 

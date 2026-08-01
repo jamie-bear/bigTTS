@@ -1,7 +1,7 @@
 import { requestOpenRouterSpeech } from "./openRouterSpeech.js";
 
 export const OPENROUTER_GEMINI_31_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
-export const GEMINI_31_DEFAULT_SEGMENT_CHARS = 1_200;
+export const GEMINI_31_DEFAULT_SEGMENT_CHARS = 500;
 export const GEMINI_31_MAX_SEGMENT_CHARS = 2_500;
 export const GEMINI_31_CONTEXT_CHARS = 240;
 export const GEMINI_31_MAX_DIRECTION_CHARS = 800;

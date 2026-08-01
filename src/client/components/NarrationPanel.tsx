@@ -1,8 +1,9 @@
 import { useEffect, useId, useState, type ReactNode, type RefObject } from "react";
 import { isOpenRouterGemini31Model, isOpenRouterPcmModel, MINIMAX_LANGUAGES, SEGMENT_OPTIONS } from "../config/providers";
 import type { useBigTtsController } from "../hooks/useBigTtsController";
+import { AudioPlayer } from "./AudioPlayer";
 import { ProviderSetup } from "./ProviderSetup";
-import { Button, Checkbox, SelectField } from "./ui/Controls";
+import { Button, Disclosure, SelectField, Slider, Switch } from "./ui/Controls";
 import { Icon } from "./ui/Icon";
 import type { SegmentFailure } from "../types/contracts";
 
@@ -26,31 +27,36 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
         <SelectField id="voice" label="Voice" options={voiceOptions} value={state.voice} onChange={(event) => actions.setVoice(event.target.value)} helper={hasVoiceGenderMetadata ? "Gender is shown as text only where provider metadata is available." : undefined} />
         {state.provider === "minimax" && <MiniMaxVoiceManager controller={controller} />}
         <div className="field-grid"><SelectField id="language" label="Language" options={providerConfig.languages} value={state.language} onChange={(event) => actions.setLanguage(event.target.value)} /><SelectField id="segmentChars" label={gemini31OpenRouter ? "Segment target" : "Segment size"} options={SEGMENT_OPTIONS.map((option) => ({ ...option, disabled: Number(option.value) > limits.maxSegmentChars }))} value={state.segmentChars} onChange={(event) => actions.setSegmentChars(Number(event.target.value))} helper={gemini31OpenRouter ? `${state.segmentChars.toLocaleString()}-character target; cuts follow sentence and paragraph structure` : `${state.segmentChars.toLocaleString()} characters per request`} /></div>
-        <div className={`setting-block ${providerConfig.supportsSpeed ? "" : "is-unavailable"}`}>
-          <div className="setting-title"><label htmlFor="speed">Reading speed</label>{providerConfig.supportsSpeed ? <output htmlFor="speed">{state.speed.toFixed(2)}×</output> : <span className="availability-badge">Unavailable</span>}</div>
-          <input id="speed" type="range" min="0.7" max="1.5" step="0.05" value={state.speed} disabled={!providerConfig.supportsSpeed} onChange={(event) => actions.setSpeed(Number(event.target.value))} />
-          {gemini31OpenRouter && <small>Gemini follows this as a narration direction; audio is not mechanically time-stretched.</small>}
-          {!providerConfig.supportsSpeed && <small>This provider does not accept a reading-speed setting.</small>}
-        </div>
-        {gemini31OpenRouter && <details className="gemini-continuity-panel">
-          <summary><span>Gemini continuity</span><span>{state.geminiContinuity ? "Enhanced" : "Standard"}</span></summary>
-          <div className="gemini-continuity-settings">
-            <Checkbox id="geminiContinuity" label="Enhanced continuity" checked={state.geminiContinuity} onChange={(event) => actions.setGeminiContinuity(event.target.checked)} />
-            <small>Uses compact silent context from neighboring segments to sustain the narrator's delivery.</small>
-            <label htmlFor="geminiNarratorDirection"><span>Narrator direction <em>Optional</em></span><textarea className="gemini-direction" id="geminiNarratorDirection" maxLength={800} value={state.geminiNarratorDirection} onChange={(event) => actions.setGeminiNarratorDirection(event.target.value)} placeholder="For example: Warm, intimate literary narration with restrained emotion." /></label>
-            <small>Keep this compatible with the selected voice. The same direction is repeated for every segment. {state.geminiNarratorDirection.length}/800</small>
-          </div>
-        </details>}
+        <Slider
+          id="speed"
+          label="Reading speed"
+          className={providerConfig.supportsSpeed ? "" : "is-unavailable"}
+          min={0.7}
+          max={1.5}
+          step={0.05}
+          value={state.speed}
+          disabled={!providerConfig.supportsSpeed}
+          valueText={`${state.speed.toFixed(2)}×`}
+          badge={providerConfig.supportsSpeed ? undefined : "Unavailable"}
+          onChange={(event) => actions.setSpeed(Number(event.target.value))}
+          helper={<>
+            {gemini31OpenRouter && <small>Gemini follows this as a narration direction; audio is not mechanically time-stretched.</small>}
+            {!providerConfig.supportsSpeed && <small>This provider does not accept a reading-speed setting.</small>}
+          </>}
+        />
+        {gemini31OpenRouter && <Disclosure className="gemini-continuity-panel" summary="Gemini continuity" meta={state.geminiContinuity ? "Enhanced" : "Standard"} bodyClassName="gemini-continuity-settings">
+          <Switch id="geminiContinuity" label="Enhanced continuity" checked={state.geminiContinuity} onChange={(event) => actions.setGeminiContinuity(event.target.checked)} />
+          <small>Uses compact silent context from neighboring segments to sustain the narrator's delivery.</small>
+          <label htmlFor="geminiNarratorDirection"><span>Narrator direction <em>Optional</em></span><textarea className="gemini-direction" id="geminiNarratorDirection" maxLength={800} value={state.geminiNarratorDirection} onChange={(event) => actions.setGeminiNarratorDirection(event.target.value)} placeholder="For example: Warm, intimate literary narration with restrained emotion." /></label>
+          <small>Keep this compatible with the selected voice. The same direction is repeated for every segment. {state.geminiNarratorDirection.length}/800</small>
+        </Disclosure>}
         <div className="capability-list" aria-label="Provider capabilities">
-          {lowLatencyAvailable && <Capability available unavailableText=""><Checkbox id="lowLatency" label="Optimize first audio chunk" checked={state.lowLatency} onChange={(event) => actions.setLowLatency(event.target.checked)} /></Capability>}
-          {textNormalizationAvailable && <Capability available unavailableText=""><Checkbox id="textNormalization" label="Normalize numbers and abbreviations" checked={state.textNormalization} onChange={(event) => actions.setTextNormalization(event.target.checked)} /></Capability>}
-          {unavailableCapabilityCount > 0 && <details className="unavailable-capabilities">
-            <summary><span>Unavailable options</span><span>{unavailableCapabilityCount}</span></summary>
-            <div className="unavailable-capability-list">
-              {!lowLatencyAvailable && <Capability available={false} unavailableText="Only xAI exposes first-chunk latency control."><Checkbox id="lowLatency" label="Optimize first audio chunk" checked={state.lowLatency} disabled onChange={(event) => actions.setLowLatency(event.target.checked)} /></Capability>}
-              {!textNormalizationAvailable && <Capability available={false} unavailableText="Only xAI exposes text normalization control."><Checkbox id="textNormalization" label="Normalize numbers and abbreviations" checked={state.textNormalization} disabled onChange={(event) => actions.setTextNormalization(event.target.checked)} /></Capability>}
-            </div>
-          </details>}
+          {lowLatencyAvailable && <Capability available unavailableText=""><Switch id="lowLatency" label="Optimize first audio chunk" checked={state.lowLatency} onChange={(event) => actions.setLowLatency(event.target.checked)} /></Capability>}
+          {textNormalizationAvailable && <Capability available unavailableText=""><Switch id="textNormalization" label="Normalize numbers and abbreviations" checked={state.textNormalization} onChange={(event) => actions.setTextNormalization(event.target.checked)} /></Capability>}
+          {unavailableCapabilityCount > 0 && <Disclosure className="unavailable-capabilities" summary="Unavailable options" meta={<span className="count-pill">{unavailableCapabilityCount}</span>} bodyClassName="unavailable-capability-list">
+            {!lowLatencyAvailable && <Capability available={false} unavailableText="Only xAI exposes first-chunk latency control."><Switch id="lowLatency" label="Optimize first audio chunk" checked={state.lowLatency} disabled onChange={(event) => actions.setLowLatency(event.target.checked)} /></Capability>}
+            {!textNormalizationAvailable && <Capability available={false} unavailableText="Only xAI exposes text normalization control."><Switch id="textNormalization" label="Normalize numbers and abbreviations" checked={state.textNormalization} disabled onChange={(event) => actions.setTextNormalization(event.target.checked)} /></Capability>}
+          </Disclosure>}
         </div>
       </form>
     </section>
@@ -68,16 +74,29 @@ export function NarrationOutput({ controller, audioRef }: { controller: Controll
   return <aside className="output-panel" aria-label="Narration output">
     <section className="card output-card" aria-labelledby="output-heading">
       <div className="compact-heading output-heading"><div className="heading-icon"><Icon name="audio" /></div><div><p className="eyebrow">Output</p><h2 id="output-heading">Narration</h2></div><span className={`phase-badge phase-${state.phase}`}>{state.phase}</span></div>
-      <div className="progress-block" aria-live="polite" aria-atomic="true"><div className="progress-copy"><span>{state.status}</span><span>{state.currentSegment} / {state.totalSegments} segments</span></div><progress value={state.progress} max={100} aria-label="Narration generation progress" /></div>
-      {state.segmentFailure && <SegmentFailurePanel failure={state.segmentFailure} onRetry={actions.retryFailedSegment} onSkip={actions.skipFailedSegment} />}
-      <div className="buffer-row"><span>Playback buffer</span><strong>{Math.round(state.bufferSeconds)}s</strong></div>
-      <audio ref={audioRef} controls aria-label="Generated narration playback" />
-      <div className="button-grid">
-        <Button id="startButton" type="button" className="primary" disabled={sessionActive} onClick={() => void actions.startNarration()}><Icon name="play" />Start narration</Button>
-        <Button type="button" disabled={!canPause && state.phase !== "paused"} onClick={state.phase === "paused" ? actions.resumeGeneration : actions.pauseGeneration}><Icon name={state.phase === "paused" ? "play" : "pause"} />{pauseLabel}</Button>
-        <Button type="button" disabled={!sessionActive} onClick={actions.stopNarration}><Icon name="stop" />Stop</Button>
+      {/* The live region stays mounted so status changes are announced rather than inserted. */}
+      <div className="progress-block" aria-live="polite" aria-atomic="true">
+        {state.phase === "idle"
+          ? <p className="output-empty">Narration audio appears here once you start. Progress, playback, and download unlock as segments arrive.</p>
+          : <>
+              <div className="progress-copy"><span>{state.status}</span><span>{state.currentSegment} / {state.totalSegments} segments</span></div>
+              <div className={`progress-rail ${state.phase === "connecting" ? "is-indeterminate" : ""}`.trim()}><progress value={state.progress} max={100} aria-label="Narration generation progress" /></div>
+            </>}
       </div>
-      <Button type="button" className="download-button" disabled={!state.audioAvailable} onClick={actions.download}><Icon name="download" />Download {partial ? "partial " : ""}{extension}<span>{state.audioAvailable ? "Includes all audio received so far" : "Available as soon as audio is received"}</span></Button>
+      {state.segmentFailure && <SegmentFailurePanel failure={state.segmentFailure} onRetry={actions.retryFailedSegment} onSkip={actions.skipFailedSegment} />}
+      <AudioPlayer audioRef={audioRef} available={state.audioAvailable} bufferSeconds={state.bufferSeconds} />
+      <div className="transport">
+        <Button id="startButton" type="button" className="primary transport-primary" disabled={sessionActive} onClick={() => void actions.startNarration()}><Icon name="play" />Start narration</Button>
+        <div className="transport-row">
+          <Button type="button" disabled={!canPause && state.phase !== "paused"} onClick={state.phase === "paused" ? actions.resumeGeneration : actions.pauseGeneration}><Icon name={state.phase === "paused" ? "play" : "pause"} />{pauseLabel}</Button>
+          <Button type="button" disabled={!sessionActive} onClick={actions.stopNarration}><Icon name="stop" />Stop</Button>
+        </div>
+      </div>
+      <Button type="button" className="download-button" disabled={!state.audioAvailable} onClick={actions.download}>
+        <Icon name="download" />
+        <span className="download-label">Download {partial ? "partial " : ""}{extension}</span>
+        <span className="download-help">{state.audioAvailable ? "Includes all audio received so far" : "Available as soon as audio is received"}</span>
+      </Button>
     </section>
   </aside>;
 }
@@ -139,53 +158,50 @@ function MiniMaxVoiceManager({ controller }: { controller: Controller }) {
     setMode("create");
   };
 
-  return <details id="minimaxVoiceClonePanel" className="voice-tools-panel">
-    <summary><span><Icon name="user" />Custom voice library</span><span>{state.minimaxVoices.length} voice{state.minimaxVoices.length === 1 ? "" : "s"}</span></summary>
-    <div className="voice-library" aria-live="polite">
-      <div className="voice-library-toolbar">
-        <div><strong>MiniMax voices</strong><span>Choose a voice above, or manage your library here.</span></div>
-        <Button type="button" onClick={() => actions.setCredential(state.credentials.minimax)}>Refresh</Button>
-      </div>
-
-      {selected ? <div className="selected-voice">
-        <div className="selected-voice-copy"><span>Selected voice</span><strong>{selected.name}</strong><code>{selected.id}</code>{selected.model && <small>{selected.model}</small>}</div>
-        <div className="voice-action-row">
-          <Button type="button" disabled={state.operationBusy} onClick={() => { setName(selected.name); setMode("rename"); }}><Icon name="settings" />Rename</Button>
-          <Button type="button" className="danger-button" disabled={state.operationBusy} onClick={() => setMode("delete")}><Icon name="trash" />Delete</Button>
-        </div>
-      </div> : <p className="voice-library-empty">No custom voices found. Add one to start narrating with MiniMax.</p>}
-
-      {mode === "rename" && selected && <div className="voice-inline-editor">
-        <label htmlFor={`${formId}-display-name`}>Display name <span>Saved in this browser</span></label>
-        <input id={`${formId}-display-name`} type="text" value={name} onChange={(event) => setName(event.target.value)} />
-        <div className="voice-inline-actions"><Button type="button" onClick={() => setMode("idle")}>Cancel</Button><Button type="button" className="primary" onClick={() => { actions.renameMinimaxClone(selected.id, name); setMode("idle"); }}>Save name</Button></div>
-      </div>}
-
-      {mode === "delete" && selected && <div className="voice-delete-confirm" role="alert">
-        <div><strong>Delete “{selected.name}”?</strong><span>This permanently removes the voice from MiniMax. This cannot be undone.</span></div>
-        <div className="voice-inline-actions"><Button type="button" onClick={() => setMode("idle")}>Cancel</Button><Button type="button" className="danger-button-solid" disabled={state.operationBusy} onClick={() => void actions.deleteMinimaxClone()}>{state.operationBusy ? "Deleting…" : "Delete voice"}</Button></div>
-      </div>}
-
-      {mode !== "create" && <Button type="button" className="add-voice-button" onClick={beginCreate}><Icon name="check" />Add new voice</Button>}
-
-      {mode === "create" && <div className="voice-create-panel">
-        <div className="voice-create-heading"><div><strong>Add a custom voice</strong><span>Source audio is required. Accent and style guidance are optional.</span></div><Button type="button" onClick={() => setMode("idle")}>Cancel</Button></div>
-        <div className="voice-clone-form">
-          <label htmlFor={`${formId}-name`}><span>Voice name</span><input id={`${formId}-name`} type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Narrator voice" /></label>
-          <label htmlFor={`${formId}-language`}><span>Language/accent</span><select id={`${formId}-language`} value={languageModel} onChange={(event) => setLanguageModel(event.target.value)}>{MINIMAX_LANGUAGES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-          <label className="voice-form-wide" htmlFor={`${formId}-preview`}><span>Preview text</span><input id={`${formId}-preview`} type="text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="A gentle breeze passes over the soft grass." /></label>
-          <label className="voice-form-wide" htmlFor={`${formId}-source`}><span>Source audio</span><input id={`${formId}-source`} type="file" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" onChange={(event) => setSource(event.target.files?.[0])} /></label>
-          <label className="voice-form-wide" htmlFor={`${formId}-transcript`}><span>Source transcript check <em>Optional</em></span><input id={`${formId}-transcript`} type="text" maxLength={200} value={validationText} onChange={(event) => setValidationText(event.target.value)} placeholder="Transcript of the source audio" /></label>
-          <label htmlFor={`${formId}-prompt-audio`}><span>Style prompt audio <em>Optional, under 8s</em></span><input id={`${formId}-prompt-audio`} type="file" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" onChange={(event) => setPrompt(event.target.files?.[0])} /></label>
-          <label htmlFor={`${formId}-prompt-text`}><span>Style prompt transcript <em>Optional</em></span><input id={`${formId}-prompt-text`} type="text" value={promptText} onChange={(event) => setPromptText(event.target.value)} placeholder="Text spoken in prompt audio" /></label>
-        </div>
-        <p className="voice-clone-policy">Only clone voices you have permission to use. Prompt audio and its transcript must be provided together.</p>
-        <Button type="button" className="primary create-voice-button" disabled={state.operationBusy} onClick={() => void actions.saveMinimaxClone({ name, previewText, languageModel, promptText, validationText, source, prompt })}><Icon name="check" />{state.operationBusy ? "Creating voice…" : "Create voice"}</Button>
-      </div>}
+  return <Disclosure id="minimaxVoiceClonePanel" className="voice-tools-panel" summary={<><Icon name="user" />Custom voice library</>} meta={`${state.minimaxVoices.length} voice${state.minimaxVoices.length === 1 ? "" : "s"}`} bodyClassName="voice-library" live>
+    <div className="voice-library-toolbar">
+      <div><strong>MiniMax voices</strong><span>Choose a voice above, or manage your library here.</span></div>
+      <Button type="button" onClick={() => actions.setCredential(state.credentials.minimax)}>Refresh</Button>
     </div>
-  </details>;
+
+    {selected ? <div className="selected-voice">
+      <div className="selected-voice-copy"><span>Selected voice</span><strong>{selected.name}</strong><code>{selected.id}</code>{selected.model && <small>{selected.model}</small>}</div>
+      <div className="voice-action-row">
+        <Button type="button" disabled={state.operationBusy} onClick={() => { setName(selected.name); setMode("rename"); }}><Icon name="settings" />Rename</Button>
+        <Button type="button" className="danger-button" disabled={state.operationBusy} onClick={() => setMode("delete")}><Icon name="trash" />Delete</Button>
+      </div>
+    </div> : <p className="voice-library-empty">No custom voices found. Add one to start narrating with MiniMax.</p>}
+
+    {mode === "rename" && selected && <div className="voice-inline-editor">
+      <label htmlFor={`${formId}-display-name`}>Display name <span>Saved in this browser</span></label>
+      <input id={`${formId}-display-name`} type="text" value={name} onChange={(event) => setName(event.target.value)} />
+      <div className="voice-inline-actions"><Button type="button" onClick={() => setMode("idle")}>Cancel</Button><Button type="button" className="primary" onClick={() => { actions.renameMinimaxClone(selected.id, name); setMode("idle"); }}>Save name</Button></div>
+    </div>}
+
+    {mode === "delete" && selected && <div className="voice-delete-confirm" role="alert">
+      <div><strong>Delete “{selected.name}”?</strong><span>This permanently removes the voice from MiniMax. This cannot be undone.</span></div>
+      <div className="voice-inline-actions"><Button type="button" onClick={() => setMode("idle")}>Cancel</Button><Button type="button" className="danger-button-solid" disabled={state.operationBusy} onClick={() => void actions.deleteMinimaxClone()}>{state.operationBusy ? "Deleting…" : "Delete voice"}</Button></div>
+    </div>}
+
+    {mode !== "create" && <Button type="button" className="add-voice-button" onClick={beginCreate}><Icon name="check" />Add new voice</Button>}
+
+    {mode === "create" && <div className="voice-create-panel">
+      <div className="voice-create-heading"><div><strong>Add a custom voice</strong><span>Source audio is required. Accent and style guidance are optional.</span></div><Button type="button" onClick={() => setMode("idle")}>Cancel</Button></div>
+      <div className="voice-clone-form">
+        <label htmlFor={`${formId}-name`}><span>Voice name</span><input id={`${formId}-name`} type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Narrator voice" /></label>
+        <label htmlFor={`${formId}-language`}><span>Language/accent</span><select id={`${formId}-language`} value={languageModel} onChange={(event) => setLanguageModel(event.target.value)}>{MINIMAX_LANGUAGES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <label className="voice-form-wide" htmlFor={`${formId}-preview`}><span>Preview text</span><input id={`${formId}-preview`} type="text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="A gentle breeze passes over the soft grass." /></label>
+        <label className="voice-form-wide" htmlFor={`${formId}-source`}><span>Source audio</span><input id={`${formId}-source`} type="file" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" onChange={(event) => setSource(event.target.files?.[0])} /></label>
+        <label className="voice-form-wide" htmlFor={`${formId}-transcript`}><span>Source transcript check <em>Optional</em></span><input id={`${formId}-transcript`} type="text" maxLength={200} value={validationText} onChange={(event) => setValidationText(event.target.value)} placeholder="Transcript of the source audio" /></label>
+        <label htmlFor={`${formId}-prompt-audio`}><span>Style prompt audio <em>Optional, under 8s</em></span><input id={`${formId}-prompt-audio`} type="file" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" onChange={(event) => setPrompt(event.target.files?.[0])} /></label>
+        <label htmlFor={`${formId}-prompt-text`}><span>Style prompt transcript <em>Optional</em></span><input id={`${formId}-prompt-text`} type="text" value={promptText} onChange={(event) => setPromptText(event.target.value)} placeholder="Text spoken in prompt audio" /></label>
+      </div>
+      <p className="voice-clone-policy">Only clone voices you have permission to use. Prompt audio and its transcript must be provided together.</p>
+      <Button type="button" className="primary create-voice-button" disabled={state.operationBusy} onClick={() => void actions.saveMinimaxClone({ name, previewText, languageModel, promptText, validationText, source, prompt })}><Icon name="check" />{state.operationBusy ? "Creating voice…" : "Create voice"}</Button>
+    </div>}
+  </Disclosure>;
 }
 
 function Capability({ available, unavailableText, children }: { available: boolean; unavailableText: string; children: ReactNode }) {
-  return <div className={`capability ${available ? "" : "is-unavailable"}`}>{children}{!available && <div className="capability-note"><span className="availability-badge">Unavailable</span><small>{unavailableText}</small></div>}</div>;
+  return <div className={`capability ${available ? "" : "is-unavailable"}`.trim()}>{children}{!available && <div className="capability-note"><span className="availability-badge">Unavailable</span><small>{unavailableText}</small></div>}</div>;
 }

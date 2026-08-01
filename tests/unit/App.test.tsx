@@ -98,7 +98,7 @@ describe("bigTTS application shell", () => {
     render(<App />);
     fireEvent.change(screen.getByLabelText("OpenRouter API key"), { target: { value: "test-key" } });
     await waitFor(() => expect(screen.getByLabelText("OpenRouter model")).toHaveValue("google/gemini-3.1-flash-tts-preview"), { timeout: 1500 });
-    expect(screen.getByLabelText("Segment target")).toHaveValue("1200");
+    expect(screen.getByLabelText("Segment target")).toHaveValue("500");
     expect(screen.getByRole("option", { name: "Long" })).toBeDisabled();
     const enhanced = screen.getByLabelText("Enhanced continuity");
     expect(enhanced).toBeChecked();
