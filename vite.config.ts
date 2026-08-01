@@ -13,6 +13,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      "/favicon.ico": backend,
       "/api": backend,
       "/auth": backend,
       "/oauth": backend,

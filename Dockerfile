@@ -7,6 +7,7 @@ RUN npm ci --no-audit --no-fund
 
 COPY index.html tsconfig*.json vite.config.ts ./
 COPY src/client ./src/client
+COPY src/logo.png ./src/logo.png
 RUN npm run build
 
 FROM node:24-alpine AS runtime
