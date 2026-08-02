@@ -177,6 +177,7 @@ export function prepareGeminiTranscript(value) {
     .replace(/^[ \t]*(?:(?:\*[ \t]*){3,}|-{3,}|(?:[_~#][ \t]*){3,})[ \t]*(?:\n|$)/gmu, "")
     .replace(/^([ \t]*)#{1,6}[ \t]+(?=\S)/gmu, "$1")
     .replace(/[ \t]+#{1,6}[ \t]*$/gmu, "")
+    .replace(/(?<!\w)(\*{1,3})(?=\S)([^*\n]*?\S)\1(?!\w)/gu, "$2")
     .trim();
 }
 

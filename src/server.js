@@ -1215,7 +1215,10 @@ export function createNarrationSession(client) {
     }
 
     if (state.options.provider === "openrouter") {
-      await synthesizeBufferedSegment((signal) => synthesizeOpenRouterSpeech(segment, state.options, state.apiKey, signal));
+      const retryOptions = state.automaticSegmentRetries > 0 && isOpenRouterGemini31Model(state.options.model)
+        ? { ...state.options, geminiContinuity: false }
+        : state.options;
+      await synthesizeBufferedSegment((signal) => synthesizeOpenRouterSpeech(segment, retryOptions, state.apiKey, signal));
       return;
     }
 

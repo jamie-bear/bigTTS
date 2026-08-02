@@ -55,10 +55,10 @@ describe("bigTTS application shell", () => {
     const statistics = screen.getByLabelText("Text statistics");
 
     fireEvent.change(text, { target: { value: "a".repeat(2501) } });
-    expect(statistics).toHaveTextContent("2segments");
+    expect(statistics).toHaveTextContent("~2segments");
 
     fireEvent.change(screen.getByLabelText("Segment size"), { target: { value: "500" } });
-    expect(statistics).toHaveTextContent("6segments");
+    expect(statistics).toHaveTextContent("~6segments");
   });
 
   it("only shows a cost estimate when pricing is available", async () => {

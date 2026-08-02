@@ -54,7 +54,7 @@ export function TextWorkspace({ controller }: { controller: Controller }) {
         <span className="metric-divider" aria-hidden="true" />
         <span className="metric"><strong>{words.toLocaleString()}</strong><span>words</span></span>
         <span className="metric-divider" aria-hidden="true" />
-        <span className="metric"><strong>{stats.segments.toLocaleString()}</strong><span>segments</span></span>
+        <span className="metric"><strong>~{stats.segments.toLocaleString()}</strong><span>segments</span></span>
         {stats.cost && <><span className="metric-divider" aria-hidden="true" /><span className="metric-cost">{stats.cost}</span></>}
       </div>
     </div>

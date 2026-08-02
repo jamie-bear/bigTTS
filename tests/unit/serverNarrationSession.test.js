@@ -127,6 +127,31 @@ describe("server narration pause state", () => {
     expect(client.events("segmentDone")[0]).toMatchObject({ index: 1, generationId: "gen-retried" });
   });
 
+  it("drops Gemini continuity context on the automatic retry", async () => {
+    const rejection = new Response(JSON.stringify({
+      error: { code: 400, message: "Provider returned 400" }
+    }), { status: 400 });
+    const audioResponse = () => new Response(new Uint8Array([0, 0, 1, 0]), {
+      status: 200,
+      headers: { "Content-Type": "audio/pcm" }
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(rejection)
+      .mockImplementation(async () => audioResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new FakeClient();
+    const session = createNarrationSession(client);
+    const text = "A complete sentence carries the narration forward with enough detail. ".repeat(12);
+
+    session.handleClientMessage({ type: "start", apiKey: "test-key", text, options: openRouterOptions });
+    await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
+
+    const firstPrompt = JSON.parse(fetchMock.mock.calls[0][1].body).input;
+    const retryPrompt = JSON.parse(fetchMock.mock.calls[1][1].body).input;
+    expect(firstPrompt).toMatch(/Following: (?!none)/u);
+    expect(retryPrompt).toContain("Previous: none\nFollowing: none");
+  });
+
   it("keeps a rejected OpenRouter segment recoverable after its automatic retry fails", async () => {
     const rejection = (requestId) => new Response(JSON.stringify({
       error: {
