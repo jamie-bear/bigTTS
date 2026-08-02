@@ -67,7 +67,7 @@ function MiniMaxSetup({ controller }: { controller: Controller }) {
     <FieldPanel id="minimaxModelPanel" className="provider-model-panel" live>
       <label htmlFor="minimaxModel">MiniMax speech model</label>
       <select id="minimaxModel" value={state.minimaxModel} onChange={(event) => actions.setMinimaxModel(event.target.value)}>{MINIMAX_MODELS.map((model) => <option key={model}>{model}</option>)}</select>
-      <span>Choose the MiniMax model used for both voice cloning preview and narration.</span>
+      <span>Choose the MiniMax model used for narration.</span>
     </FieldPanel>
   );
 }

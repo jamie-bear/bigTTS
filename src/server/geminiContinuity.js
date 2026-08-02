@@ -108,6 +108,7 @@ export function createGeminiNarrationSegments(text, options = {}) {
   }
   flush();
 
+  mergeShortBoundaryTails(groups, preferredMin, hardMaxChars);
   rebalanceShortTail(groups, targetChars, hardMaxChars);
 
   const segments = groups.map((group, index) => ({
@@ -165,7 +166,18 @@ ${context}
 Do not speak this context.
 
 # TRANSCRIPT
-${segment.text}`;
+${prepareGeminiTranscript(segment.text)}`;
+}
+
+export function prepareGeminiTranscript(value) {
+  return String(value || "")
+    // Scene dividers and Markdown heading sigils are document structure, not
+    // narration. Keeping them inside the prompt can make a nested transcript
+    // look like a new prompt section to Gemini.
+    .replace(/^[ \t]*(?:(?:\*[ \t]*){3,}|-{3,}|(?:[_~#][ \t]*){3,})[ \t]*(?:\n|$)/gmu, "")
+    .replace(/^([ \t]*)#{1,6}[ \t]+(?=\S)/gmu, "$1")
+    .replace(/[ \t]+#{1,6}[ \t]*$/gmu, "")
+    .trim();
 }
 
 export async function requestOpenRouterGemini31Speech(options) {
@@ -350,6 +362,21 @@ function safeCodePointCut(text, maximum) {
   const code = text.charCodeAt(cut - 1);
   if (code >= 0xD800 && code <= 0xDBFF) cut -= 1;
   return Math.max(1, cut);
+}
+
+function mergeShortBoundaryTails(groups, preferredMin, hardMaxChars) {
+  for (let index = 1; index < groups.length; index += 1) {
+    const tail = groups[index];
+    if (groupLength(tail) >= preferredMin) continue;
+    if (!STRONG_BOUNDARIES.has(tail.at(-1)?.boundaryAfter)) continue;
+    if (STRONG_BOUNDARIES.has(tail[0]?.boundaryBefore)) continue;
+
+    const previous = groups[index - 1];
+    if (groupLength(previous) + groupLength(tail) > hardMaxChars) continue;
+    previous.push(...tail);
+    groups.splice(index, 1);
+    index -= 1;
+  }
 }
 
 function rebalanceShortTail(groups, targetChars, hardMaxChars) {

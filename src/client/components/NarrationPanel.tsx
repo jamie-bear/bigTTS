@@ -84,7 +84,7 @@ export function NarrationOutput({ controller, audioRef }: { controller: Controll
             </>}
       </div>
       {state.segmentFailure && <SegmentFailurePanel failure={state.segmentFailure} onRetry={actions.retryFailedSegment} onSkip={actions.skipFailedSegment} />}
-      <AudioPlayer audioRef={audioRef} available={state.audioAvailable} bufferSeconds={state.bufferSeconds} />
+      <AudioPlayer audioRef={audioRef} available={state.audioAvailable} />
       <div className="transport">
         <Button id="startButton" type="button" className="primary transport-primary" disabled={sessionActive} onClick={() => void actions.startNarration()}><Icon name="play" />Start narration</Button>
         <div className="transport-row">
@@ -134,7 +134,6 @@ function MiniMaxVoiceManager({ controller }: { controller: Controller }) {
   const selected = state.minimaxVoices.find((voice) => voice.id === state.voice);
   const [mode, setMode] = useState<"idle" | "create" | "rename" | "delete">("idle");
   const [name, setName] = useState("");
-  const [previewText, setPreviewText] = useState("");
   const [languageModel, setLanguageModel] = useState("auto");
   const [promptText, setPromptText] = useState("");
   const [validationText, setValidationText] = useState("");
@@ -149,7 +148,6 @@ function MiniMaxVoiceManager({ controller }: { controller: Controller }) {
 
   const beginCreate = () => {
     setName("");
-    setPreviewText("");
     setLanguageModel("auto");
     setPromptText("");
     setValidationText("");
@@ -161,7 +159,7 @@ function MiniMaxVoiceManager({ controller }: { controller: Controller }) {
   return <Disclosure id="minimaxVoiceClonePanel" className="voice-tools-panel" summary={<><Icon name="user" />Custom voice library</>} meta={`${state.minimaxVoices.length} voice${state.minimaxVoices.length === 1 ? "" : "s"}`} bodyClassName="voice-library" live>
     <div className="voice-library-toolbar">
       <div><strong>MiniMax voices</strong><span>Choose a voice above, or manage your library here.</span></div>
-      <Button type="button" onClick={() => actions.setCredential(state.credentials.minimax)}>Refresh</Button>
+      <Button type="button" disabled={state.operationBusy} onClick={() => void actions.refreshMinimaxVoices()}>Refresh</Button>
     </div>
 
     {selected ? <div className="selected-voice">
@@ -190,14 +188,13 @@ function MiniMaxVoiceManager({ controller }: { controller: Controller }) {
       <div className="voice-clone-form">
         <label htmlFor={`${formId}-name`}><span>Voice name</span><input id={`${formId}-name`} type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Narrator voice" /></label>
         <label htmlFor={`${formId}-language`}><span>Language/accent</span><select id={`${formId}-language`} value={languageModel} onChange={(event) => setLanguageModel(event.target.value)}>{MINIMAX_LANGUAGES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-        <label className="voice-form-wide" htmlFor={`${formId}-preview`}><span>Preview text</span><input id={`${formId}-preview`} type="text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="A gentle breeze passes over the soft grass." /></label>
         <label className="voice-form-wide" htmlFor={`${formId}-source`}><span>Source audio</span><input id={`${formId}-source`} type="file" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" onChange={(event) => setSource(event.target.files?.[0])} /></label>
         <label className="voice-form-wide" htmlFor={`${formId}-transcript`}><span>Source transcript check <em>Optional</em></span><input id={`${formId}-transcript`} type="text" maxLength={200} value={validationText} onChange={(event) => setValidationText(event.target.value)} placeholder="Transcript of the source audio" /></label>
         <label htmlFor={`${formId}-prompt-audio`}><span>Style prompt audio <em>Optional, under 8s</em></span><input id={`${formId}-prompt-audio`} type="file" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" onChange={(event) => setPrompt(event.target.files?.[0])} /></label>
         <label htmlFor={`${formId}-prompt-text`}><span>Style prompt transcript <em>Optional</em></span><input id={`${formId}-prompt-text`} type="text" value={promptText} onChange={(event) => setPromptText(event.target.value)} placeholder="Text spoken in prompt audio" /></label>
       </div>
       <p className="voice-clone-policy">Only clone voices you have permission to use. Prompt audio and its transcript must be provided together.</p>
-      <Button type="button" className="primary create-voice-button" disabled={state.operationBusy} onClick={() => void actions.saveMinimaxClone({ name, previewText, languageModel, promptText, validationText, source, prompt })}><Icon name="check" />{state.operationBusy ? "Creating voice…" : "Create voice"}</Button>
+      <Button type="button" className="primary create-voice-button" disabled={state.operationBusy} onClick={() => void actions.saveMinimaxClone({ name, languageModel, promptText, validationText, source, prompt })}><Icon name="check" />{state.operationBusy ? "Creating voice…" : "Create voice"}</Button>
     </div>}
   </Disclosure>;
 }

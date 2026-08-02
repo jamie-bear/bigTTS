@@ -18,7 +18,8 @@ ENV NODE_ENV=production
 ENV PORT=20204
 
 COPY package.json ./
-COPY src ./src
+COPY src/server.js ./src/server.js
+COPY src/server ./src/server
 COPY --from=build /app/dist ./dist
 
 EXPOSE 20204

@@ -131,6 +131,8 @@ For Google Cloud TTS, this app uses Cloud Text-to-Speech `text:synthesize` at `h
 
 Resemble.ai uses `https://app.resemble.ai/api/v2/voices` to list ready custom voices after a Resemble.ai API key is entered, then calls `https://f.cluster.resemble.ai/synthesize` with the selected `voice_uuid`, 22.05 kHz sample rate, and `PCM_16` WAV precision. Resemble.ai returns base64 WAV audio; the backend forwards the decoded 16-bit PCM payload so the browser can play and download a continuous WAV.
 
+MiniMax voice cloning accepts an optional transcript of the source recording. When supplied, the backend forwards it as `text_validation` so MiniMax can reject a sample whose recognized speech does not match. bigTTS does not request an automatic clone preview: MiniMax bills preview text as TTS usage, and the app does not expose a separate preview player.
+
 The direct Gemini API and Google Cloud TTS routes retain their existing 500-character defaults. Cloud Gemini-TTS has a 4,000-byte text-field limit per request, so the backend applies a stricter Google segment cap and checks UTF-8 byte length when splitting text. The continuity behavior described above applies only to Gemini 3.1 through OpenRouter.
 
 Sources:

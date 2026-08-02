@@ -25,7 +25,7 @@ describe("audio assembly", () => {
     audio.load = vi.fn();
     audio.play = vi.fn(async () => undefined);
     const onAudioAvailable = vi.fn();
-    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onBufferChange: vi.fn(), onLevel: vi.fn(), onAudioAvailable });
+    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onAudioAvailable });
     engine.reset("pcm_s16le");
     engine.beginSegment(1);
     engine.push(new Uint8Array([1, 2, 3, 4]).buffer);
@@ -34,6 +34,42 @@ describe("audio assembly", () => {
     expect(partial?.extension).toBe("wav");
     expect(partial?.blob.size).toBe(48);
     engine.dispose();
+  });
+
+  it("reports audio availability once per narration reset", () => {
+    const audio = document.createElement("audio");
+    audio.load = vi.fn();
+    const onAudioAvailable = vi.fn();
+    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onAudioAvailable });
+    engine.reset("pcm_s16le");
+    engine.beginSegment(1);
+    engine.push(new Uint8Array([1, 2]).buffer);
+    engine.push(new Uint8Array([3, 4]).buffer);
+    expect(onAudioAvailable).toHaveBeenCalledOnce();
+
+    engine.reset("pcm_s16le");
+    engine.beginSegment(1);
+    engine.push(new Uint8Array([5, 6]).buffer);
+    expect(onAudioAvailable).toHaveBeenCalledTimes(2);
+    engine.dispose();
+  });
+
+  it("does not build an MPEG snapshot when a segment completes during MediaSource playback", () => {
+    class FakeMediaSource extends EventTarget {}
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.mocked(URL.createObjectURL).mockClear();
+    const audio = document.createElement("audio");
+    audio.play = vi.fn(async () => undefined);
+    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onAudioAvailable: vi.fn() });
+    engine.reset("mpeg");
+    expect(URL.createObjectURL).toHaveBeenCalledOnce();
+
+    engine.beginSegment(1);
+    engine.push(new Uint8Array([1, 2, 3, 4]).buffer);
+    engine.finishSegment(1);
+    expect(URL.createObjectURL).toHaveBeenCalledOnce();
+    engine.dispose();
+    vi.unstubAllGlobals();
   });
 
   it("stages cumulative PCM updates until the current playback reaches its endpoint", () => {
@@ -47,13 +83,13 @@ describe("audio assembly", () => {
     Object.defineProperty(audio, "duration", { configurable: true, get: () => 10 });
     audio.play = vi.fn(async () => { paused = false; });
     audio.load = vi.fn();
-    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onBufferChange: vi.fn(), onLevel: vi.fn(), onAudioAvailable: vi.fn() });
+    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onAudioAvailable: vi.fn() });
     engine.reset("pcm_s16le");
 
     engine.beginSegment(1);
     engine.push(new Uint8Array([1, 2, 3, 4]).buffer);
-    const first = engine.finishSegment(1);
-    expect(first?.blob.size).toBe(48);
+    engine.finishSegment(1);
+    expect(engine.snapshot()?.blob.size).toBe(48);
     expect(audio.src).toContain("blob:pcm-1");
     audio.dispatchEvent(new Event("loadedmetadata"));
     expect(audio.play).toHaveBeenCalledOnce();
@@ -61,8 +97,8 @@ describe("audio assembly", () => {
     audio.currentTime = 1.5;
     engine.beginSegment(2);
     engine.push(new Uint8Array([5, 6, 7, 8]).buffer);
-    const second = engine.finishSegment(2);
-    expect(second?.blob.size).toBe(52);
+    engine.finishSegment(2);
+    expect(engine.snapshot()?.blob.size).toBe(52);
     expect(audio.src).toContain("blob:pcm-1");
     expect(audio.load).toHaveBeenCalledTimes(2);
     paused = true;
@@ -85,7 +121,7 @@ describe("audio assembly", () => {
     Object.defineProperty(audio, "duration", { configurable: true, get: () => 10 });
     audio.play = vi.fn(async () => { paused = false; });
     audio.load = vi.fn();
-    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onBufferChange: vi.fn(), onLevel: vi.fn(), onAudioAvailable: vi.fn() });
+    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onAudioAvailable: vi.fn() });
     engine.reset("pcm_s16le");
     engine.beginSegment(1);
     engine.push(new Uint8Array([1, 2]).buffer);
@@ -106,7 +142,7 @@ describe("audio assembly", () => {
     vi.mocked(URL.createObjectURL).mockClear();
     const audio = document.createElement("audio");
     audio.load = vi.fn();
-    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onBufferChange: vi.fn(), onLevel: vi.fn(), onAudioAvailable: vi.fn() });
+    const engine = new AudioEngine(audio, { onStatus: vi.fn(), onAudioAvailable: vi.fn() });
     engine.reset("pcm_s16le");
     engine.beginSegment(1);
     engine.push(new Uint8Array([1, 2, 3, 4]).buffer);

@@ -48,6 +48,32 @@ describe("bigTTS application shell", () => {
     expect(screen.getByLabelText("Book or chapter text")).toHaveValue("");
   });
 
+  it("updates the estimated segment count when text or the segment target changes", async () => {
+    render(<App />);
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const text = screen.getByLabelText("Book or chapter text");
+    const statistics = screen.getByLabelText("Text statistics");
+
+    fireEvent.change(text, { target: { value: "a".repeat(2501) } });
+    expect(statistics).toHaveTextContent("2segments");
+
+    fireEvent.change(screen.getByLabelText("Segment size"), { target: { value: "500" } });
+    expect(statistics).toHaveTextContent("6segments");
+  });
+
+  it("only shows a cost estimate when pricing is available", async () => {
+    render(<App />);
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const statistics = screen.getByLabelText("Text statistics");
+    fireEvent.change(screen.getByLabelText("Book or chapter text"), { target: { value: "a".repeat(2501) } });
+
+    expect(statistics).not.toHaveTextContent("pricing varies by model");
+    expect(statistics).not.toHaveTextContent("estimated");
+
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "xai" } });
+    expect(statistics).toHaveTextContent("$0.038 estimated");
+  });
+
   it("switches provider capabilities and explains unavailable settings", async () => {
     render(<App />);
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "xai" } });
@@ -62,6 +88,48 @@ describe("bigTTS application shell", () => {
     expect(unavailableOptions).toHaveAttribute("open");
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.getByText("Google OAuth is not configured")).toBeInTheDocument());
+  });
+
+  it("refreshes Google OAuth status after a successful popup message", async () => {
+    let statusRequests = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google-oauth/status")) {
+        statusRequests += 1;
+        return new Response(JSON.stringify({ configured: true, connected: statusRequests > 1 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ models: [], voices: [] }), { status: 200 });
+    });
+    render(<App />);
+    await waitFor(() => expect(statusRequests).toBe(1));
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "google" } });
+
+    act(() => window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      data: { type: "google-oauth", ok: true }
+    })));
+
+    await waitFor(() => expect(screen.getByText("Google connected")).toBeInTheDocument());
+    expect(statusRequests).toBe(2);
+  });
+
+  it("surfaces a failed Google OAuth popup message without marking Google connected", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google-oauth/status")) return new Response(JSON.stringify({ configured: true, connected: false }), { status: 200 });
+      return new Response(JSON.stringify({ models: [], voices: [] }), { status: 200 });
+    });
+    render(<App />);
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "google" } });
+
+    act(() => window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      data: { type: "google-oauth", ok: false, message: "Google access was denied." }
+    })));
+
+    expect(await screen.findByText("Google access was denied.")).toBeInTheDocument();
+    expect(screen.queryByText("Google connected")).not.toBeInTheDocument();
   });
 
   it("shows either the API key editor or the saved-session control", async () => {

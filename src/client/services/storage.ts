@@ -31,12 +31,22 @@ export function writeCredential(provider: ProviderId, value: string, remember: b
 export function readVoiceClones(key: "minimaxVoiceClones"): VoiceClone[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEYS[key]) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((voice): voice is VoiceClone => Boolean(voice && typeof voice === "object" && "id" in voice)) : [];
+    return Array.isArray(parsed)
+      ? parsed
+        .filter((voice): voice is VoiceClone => Boolean(voice && typeof voice === "object" && "id" in voice))
+        .map(toStoredVoiceClone)
+      : [];
   } catch {
     return [];
   }
 }
 
 export function writeVoiceClones(key: "minimaxVoiceClones", voices: VoiceClone[]) {
-  localStorage.setItem(STORAGE_KEYS[key], JSON.stringify(voices));
+  localStorage.setItem(STORAGE_KEYS[key], JSON.stringify(voices.map(toStoredVoiceClone)));
+}
+
+function toStoredVoiceClone(voice: VoiceClone): VoiceClone {
+  const id = String(voice.id || "");
+  const model = typeof voice.model === "string" && voice.model ? voice.model : undefined;
+  return { id, name: String(voice.name || id), ...(model ? { model } : {}) };
 }

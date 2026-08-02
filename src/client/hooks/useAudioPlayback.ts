@@ -5,13 +5,14 @@ export interface AudioPlaybackState {
   currentTime: number;
   duration: number;
   bufferedEnd: number;
+  bufferedAhead: number;
   seekable: boolean;
   volume: number;
   muted: boolean;
   rate: number;
 }
 
-const IDLE: AudioPlaybackState = { playing: false, currentTime: 0, duration: Number.NaN, bufferedEnd: 0, seekable: false, volume: 1, muted: false, rate: 1 };
+const IDLE: AudioPlaybackState = { playing: false, currentTime: 0, duration: Number.NaN, bufferedEnd: 0, bufferedAhead: 0, seekable: false, volume: 1, muted: false, rate: 1 };
 
 // AudioEngine swaps `src` and restores `currentTime` at every segment boundary, so nothing
 // here may be cached across renders — each of these events re-reads the element.
@@ -36,6 +37,20 @@ function bufferedEndOf(audio: HTMLAudioElement) {
   }
 }
 
+function bufferedAheadOf(audio: HTMLAudioElement) {
+  const currentTime = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+  try {
+    for (let index = 0; index < audio.buffered.length; index += 1) {
+      const start = audio.buffered.start(index);
+      const end = audio.buffered.end(index);
+      if (currentTime >= start && currentTime <= end) return Math.max(0, end - currentTime);
+    }
+  } catch {
+    // Media ranges can change while they are being read.
+  }
+  return 0;
+}
+
 function readAudio(audio: HTMLAudioElement): AudioPlaybackState {
   const duration = audio.duration;
   return {
@@ -43,6 +58,7 @@ function readAudio(audio: HTMLAudioElement): AudioPlaybackState {
     currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
     duration,
     bufferedEnd: bufferedEndOf(audio),
+    bufferedAhead: bufferedAheadOf(audio),
     seekable: Number.isFinite(duration) && duration > 0,
     volume: audio.volume,
     muted: audio.muted,
@@ -55,6 +71,7 @@ function isSame(a: AudioPlaybackState, b: AudioPlaybackState) {
     && a.currentTime === b.currentTime
     && Object.is(a.duration, b.duration)
     && a.bufferedEnd === b.bufferedEnd
+    && a.bufferedAhead === b.bufferedAhead
     && a.seekable === b.seekable
     && a.volume === b.volume
     && a.muted === b.muted

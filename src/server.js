@@ -91,8 +91,8 @@ const MAX_SEGMENT_CHARS = 12_000;
 const GOOGLE_MAX_SEGMENT_CHARS = 4_500;
 const GOOGLE_MAX_SEGMENT_BYTES = 3_900;
 const MIN_SEGMENT_CHARS = 300;
+const AUTOMATIC_SEGMENT_RETRIES = 1;
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const googleAccessTokenCache = new Map();
 const googleOAuthStates = new Map();
 let googleOAuthTokenCache = null;
 
@@ -387,7 +387,7 @@ async function handleMinimaxVoices(req, res, pathname) {
 
   let body;
   try {
-    body = await readJsonRequest(req, pathname === "/api/minimax/voices/create" ? 48 * 1024 * 1024 : 16_384);
+    body = await readJsonRequest(req, pathname === "/api/minimax/voices/create" ? 64 * 1024 * 1024 : 16_384);
   } catch (error) {
     sendJson(res, 400, { error: error.message });
     return;
@@ -445,13 +445,17 @@ async function createMinimaxVoiceClone(res, body, apiKey) {
     const voiceId = createMiniMaxVoiceId(name);
     const sourceAudio = sanitizeBase64Audio(body.sourceAudio, 28 * 1024 * 1024);
     if (!sourceAudio) throw new Error("Source audio is required.");
+    const promptAudio = sanitizeBase64Audio(body.promptAudio, 28 * 1024 * 1024);
+    const promptText = String(body.promptText || "").trim();
+    if (Boolean(promptAudio) !== Boolean(promptText)) {
+      throw new Error("MiniMax prompt audio and prompt text must be provided together.");
+    }
     const sourceFileId = await uploadMiniMaxAudio(apiKey, {
       purpose: "voice_clone",
       audio: sourceAudio,
       filename: String(body.sourceFilename || "voice-clone.wav").trim(),
       contentType: String(body.sourceContentType || "application/octet-stream").trim()
     });
-    const promptAudio = sanitizeBase64Audio(body.promptAudio, 28 * 1024 * 1024);
     let promptFileId = "";
     if (promptAudio) {
       promptFileId = await uploadMiniMaxAudio(apiKey, {
@@ -464,40 +468,49 @@ async function createMinimaxVoiceClone(res, body, apiKey) {
 
     const speechModel = sanitizeMiniMaxModel(body.model);
     const languageModel = sanitizeMiniMaxCloneLanguageModel(body.languageModel);
-    const payload = {
-      file_id: Number(sourceFileId) || sourceFileId,
-      voice_id: voiceId,
-      text: String(body.previewText || "A gentle breeze passes over the soft grass, accompanied by a fresh scent and birdsong.").trim().slice(0, 1000),
-      need_noise_reduction: true,
-      need_volume_normalization: true
-    };
-    payload.model = speechModel;
-    if (languageModel) payload.language_boost = languageModel;
-    const promptText = String(body.promptText || "").trim();
-    if (promptFileId || promptText) {
-      if (!promptFileId || !promptText) throw new Error("MiniMax prompt audio and prompt text must be provided together.");
-      payload.clone_prompt = {
-        prompt_audio: Number(promptFileId) || promptFileId,
-        prompt_text: promptText.slice(0, 1000)
-      };
-    }
+    const payload = buildMiniMaxVoiceClonePayload({
+      sourceFileId,
+      voiceId,
+      languageModel,
+      validationText: body.validationText,
+      promptFileId,
+      promptText
+    });
 
-    const parsed = await requestMiniMaxJson(MINIMAX_VOICE_CLONE_URL, { apiKey, method: "POST", payload, timeoutMs: MINIMAX_REQUEST_TIMEOUT_MS });
+    await requestMiniMaxJson(MINIMAX_VOICE_CLONE_URL, { apiKey, method: "POST", payload, timeoutMs: MINIMAX_REQUEST_TIMEOUT_MS });
     sendJson(res, 200, {
       voice: {
         id: voiceId,
         name,
-        model: speechModel,
-        cloneLanguageModel: languageModel || "auto",
-        sourceFileId,
-        promptFileId,
-        previewAudio: extractMiniMaxAudioBase64(parsed),
-        updatedAt: new Date().toISOString()
+        model: speechModel
       }
     });
   } catch (error) {
     sendJson(res, 502, { error: `MiniMax voice clone failed: ${error.message}` });
   }
+}
+
+export function buildMiniMaxVoiceClonePayload({ sourceFileId, voiceId, languageModel = "", validationText = "", promptFileId = "", promptText = "" }) {
+  const normalizedPromptText = String(promptText || "").trim();
+  if (Boolean(promptFileId) !== Boolean(normalizedPromptText)) {
+    throw new Error("MiniMax prompt audio and prompt text must be provided together.");
+  }
+  const payload = {
+    file_id: Number(sourceFileId) || sourceFileId,
+    voice_id: voiceId,
+    need_noise_reduction: true,
+    need_volume_normalization: true
+  };
+  if (languageModel) payload.language_boost = languageModel;
+  const transcript = String(validationText || "").trim().slice(0, 200);
+  if (transcript) payload.text_validation = transcript;
+  if (promptFileId) {
+    payload.clone_prompt = {
+      prompt_audio: Number(promptFileId) || promptFileId,
+      prompt_text: normalizedPromptText.slice(0, 1000)
+    };
+  }
+  return payload;
 }
 
 async function uploadMiniMaxAudio(apiKey, { purpose, audio, filename, contentType }) {
@@ -560,12 +573,6 @@ function sanitizeMiniMaxCloneLanguageModel(value) {
     "Afrikaans"
   ]);
   return allowed.has(model) ? model : "auto";
-}
-
-function extractMiniMaxAudioBase64(parsed) {
-  const audio = parsed?.data?.audio || parsed?.audio || "";
-  if (!audio) return "";
-  return /^[0-9a-f]+$/i.test(audio) ? Buffer.from(audio, "hex").toString("base64") : String(audio);
 }
 
 async function handleResembleVoices(req, res) {
@@ -934,9 +941,9 @@ async function deleteGoogleOAuthTokenFile() {
 function sendGoogleOAuthResult(res, status, { title, message, success }) {
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message);
-  const script = success
-    ? "<script>window.opener?.postMessage({ type: 'google-oauth-complete' }, window.location.origin); window.setTimeout(() => window.close(), 1200);</script>"
-    : "";
+  const popupPayload = JSON.stringify({ type: "google-oauth", ok: success, message }).replace(/</g, "\\u003c");
+  const closeScript = success ? " window.setTimeout(() => window.close(), 1200);" : "";
+  const script = `<script>window.opener?.postMessage(${popupPayload}, window.location.origin);${closeScript}</script>`;
 
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
   res.end(`<!doctype html>
@@ -975,21 +982,14 @@ export function createNarrationSession(client) {
     options: {},
     segments: [],
     segmentIndex: 0,
-    waitingForAudioDone: false,
-    currentSegmentBytes: 0,
-    totalBytes: 0,
-    lastByteReportAt: 0
+    automaticSegmentRetries: 0,
+    waitingForAudioDone: false
   };
 
   return {
     handleClientMessage(message) {
       if (message.type === "start") {
         start(message).catch((error) => fail(error));
-        return;
-      }
-
-      if (message.type === "telemetry") {
-        // Playback telemetry is display-only; generation should keep moving.
         return;
       }
 
@@ -1029,12 +1029,10 @@ export function createNarrationSession(client) {
     const text = normalizeText(String(message.text || ""));
     const options = sanitizeOptions(message.options || {});
 
-    if (!apiKey) {
-      if (options.provider !== "google" || !(await hasGoogleOAuthRefreshToken())) {
-        throw new Error(options.provider === "google"
-          ? "Connect Google before starting narration."
-          : `Add your ${providerLabel(options.provider)} credential before starting narration.`);
-      }
+    if (options.provider === "google") {
+      if (!(await hasGoogleOAuthRefreshToken())) throw new Error("Connect Google before starting narration.");
+    } else if (!apiKey) {
+      throw new Error(`Add your ${providerLabel(options.provider)} credential before starting narration.`);
     }
 
     if (!text) {
@@ -1049,9 +1047,8 @@ export function createNarrationSession(client) {
     state.apiKey = apiKey;
     state.options = options;
     state.segmentIndex = 0;
+    state.automaticSegmentRetries = 0;
     state.waitingForAudioDone = false;
-    state.currentSegmentBytes = 0;
-    state.totalBytes = 0;
     state.segments = options.provider === "openrouter" && isOpenRouterGemini31Model(options.model)
       ? createGeminiNarrationSegments(text, { targetChars: options.segmentChars })
       : splitText(text, options.segmentChars, options.maxSegmentBytes).map((segmentText, index, segments) => ({
@@ -1064,13 +1061,10 @@ export function createNarrationSession(client) {
 
     sendJsonWs(client, {
       type: "meta",
-      provider: options.provider,
       audioEncoding: getProviderAudioEncoding(options),
       sampleRate: getProviderSampleRate(options),
       channels: 1,
-      totalChars: text.length,
-      totalSegments: state.segments.length,
-      segmentChars: options.segmentChars
+      totalSegments: state.segments.length
     });
 
     if (options.provider === "google") {
@@ -1194,46 +1188,44 @@ export function createNarrationSession(client) {
     const index = state.segmentIndex + 1;
     state.recoverableError = null;
     state.segmentIndex += 1;
+    state.automaticSegmentRetries = 0;
     sendJsonWs(client, { type: "segmentSkipped", index, totalSegments: state.segments.length });
     await pumpNextSegment();
   }
 
   async function sendSegment(segment) {
     state.waitingForAudioDone = true;
-    state.currentSegmentBytes = 0;
 
     sendJsonWs(client, {
       type: "segment",
       index: state.segmentIndex + 1,
       totalSegments: state.segments.length,
-      chars: segment.text.length,
-      preview: segment.text.slice(0, 140),
       boundaryBefore: segment.boundaryBefore,
       boundaryAfter: segment.boundaryAfter
     });
 
     if (state.options.provider === "google") {
-      await synthesizeGoogleSegment(segment.text);
+      await synthesizeBufferedSegment((signal) => synthesizeGoogleSpeech(segment.text, state.options, signal));
       return;
     }
 
     if (state.options.provider === "gemini") {
-      await synthesizeGeminiSegment(segment.text);
+      await synthesizeBufferedSegment((signal) => synthesizeGeminiSpeech(segment.text, state.options, state.apiKey, signal));
       return;
     }
 
     if (state.options.provider === "openrouter") {
-      await synthesizeOpenRouterSegment(segment);
+      await synthesizeBufferedSegment((signal) => synthesizeOpenRouterSpeech(segment, state.options, state.apiKey, signal));
       return;
     }
 
     if (state.options.provider === "resemble") {
-      await synthesizeResembleSegment(segment.text);
+      await synthesizeBufferedSegment((signal) => synthesizeResembleSpeech(segment.text, state.options, state.apiKey, signal));
       return;
     }
 
     if (state.options.provider === "minimax") {
-      await synthesizeMiniMaxSegment(segment.text);
+      await synthesizeBufferedSegment((signal) => synthesizeMiniMaxSpeech(segment.text, state.options, state.apiKey, signal));
       return;
     }
 
@@ -1249,176 +1241,31 @@ export function createNarrationSession(client) {
     upstream.send(JSON.stringify({ type: "text.done" }));
   }
 
-  async function synthesizeGoogleSegment(segment) {
+  async function synthesizeBufferedSegment(synthesize) {
     const controller = new AbortController();
     state.currentRequest = controller;
 
     try {
-      const chunk = await synthesizeGoogleSpeech(segment, state.options, state.apiKey, controller.signal);
+      const result = await synthesize(controller.signal);
       if (state.cancelled) return;
-
-      state.currentSegmentBytes = chunk.length;
-      state.totalBytes += chunk.length;
+      const chunk = Buffer.isBuffer(result) ? result : result.audio;
 
       if (client.readyState === WebSocketConnection.OPEN) {
         client.send(chunk, { binary: true });
       }
 
       state.waitingForAudioDone = false;
-      reportBytes(true);
 
       sendJsonWs(client, {
         type: "segmentDone",
         index: state.segmentIndex + 1,
         totalSegments: state.segments.length,
-        traceId: null,
-        bytes: state.currentSegmentBytes
-      });
-
-      state.segmentIndex += 1;
-      await pumpNextSegment();
-    } finally {
-      if (state.currentRequest === controller) {
-        state.currentRequest = null;
-      }
-    }
-  }
-
-  async function synthesizeOpenRouterSegment(segment) {
-    const controller = new AbortController();
-    state.currentRequest = controller;
-
-    try {
-      const result = await synthesizeOpenRouterSpeech(segment, state.options, state.apiKey, controller.signal);
-      if (state.cancelled) return;
-      const chunk = result.audio;
-
-      state.currentSegmentBytes = chunk.length;
-      state.totalBytes += chunk.length;
-
-      if (client.readyState === WebSocketConnection.OPEN) {
-        client.send(chunk, { binary: true });
-      }
-
-      state.waitingForAudioDone = false;
-      reportBytes(true);
-
-      sendJsonWs(client, {
-        type: "segmentDone",
-        index: state.segmentIndex + 1,
-        totalSegments: state.segments.length,
-        traceId: result.generationId || null,
         generationId: result.generationId || undefined,
-        attempts: result.attempts,
-        bytes: state.currentSegmentBytes
+        attempts: result.attempts
       });
 
       state.segmentIndex += 1;
-      await pumpNextSegment();
-    } finally {
-      if (state.currentRequest === controller) {
-        state.currentRequest = null;
-      }
-    }
-  }
-
-  async function synthesizeMiniMaxSegment(segment) {
-    const controller = new AbortController();
-    state.currentRequest = controller;
-
-    try {
-      const chunk = await synthesizeMiniMaxSpeech(segment, state.options, state.apiKey, controller.signal);
-      if (state.cancelled) return;
-
-      state.currentSegmentBytes = chunk.length;
-      state.totalBytes += chunk.length;
-
-      if (client.readyState === WebSocketConnection.OPEN) {
-        client.send(chunk, { binary: true });
-      }
-
-      state.waitingForAudioDone = false;
-      reportBytes(true);
-
-      sendJsonWs(client, {
-        type: "segmentDone",
-        index: state.segmentIndex + 1,
-        totalSegments: state.segments.length,
-        traceId: null,
-        bytes: state.currentSegmentBytes
-      });
-
-      state.segmentIndex += 1;
-      await pumpNextSegment();
-    } finally {
-      if (state.currentRequest === controller) {
-        state.currentRequest = null;
-      }
-    }
-  }
-
-  async function synthesizeResembleSegment(segment) {
-    const controller = new AbortController();
-    state.currentRequest = controller;
-
-    try {
-      const chunk = await synthesizeResembleSpeech(segment, state.options, state.apiKey, controller.signal);
-      if (state.cancelled) return;
-
-      state.currentSegmentBytes = chunk.length;
-      state.totalBytes += chunk.length;
-
-      if (client.readyState === WebSocketConnection.OPEN) {
-        client.send(chunk, { binary: true });
-      }
-
-      state.waitingForAudioDone = false;
-      reportBytes(true);
-
-      sendJsonWs(client, {
-        type: "segmentDone",
-        index: state.segmentIndex + 1,
-        totalSegments: state.segments.length,
-        traceId: null,
-        bytes: state.currentSegmentBytes
-      });
-
-      state.segmentIndex += 1;
-      await pumpNextSegment();
-    } finally {
-      if (state.currentRequest === controller) {
-        state.currentRequest = null;
-      }
-    }
-  }
-
-  async function synthesizeGeminiSegment(segment) {
-    const controller = new AbortController();
-    state.currentRequest = controller;
-
-    try {
-      const chunk = await synthesizeGeminiSpeech(segment, state.options, state.apiKey, controller.signal);
-      if (state.cancelled) return;
-
-      state.currentSegmentBytes = chunk.length;
-      state.totalBytes += chunk.length;
-
-      if (client.readyState === WebSocketConnection.OPEN) {
-        client.send(chunk, { binary: true });
-      }
-
-      state.waitingForAudioDone = false;
-      reportBytes(true);
-
-      sendJsonWs(client, {
-        type: "segmentDone",
-        index: state.segmentIndex + 1,
-        totalSegments: state.segments.length,
-        traceId: null,
-        bytes: state.currentSegmentBytes
-      });
-
-      state.segmentIndex += 1;
+      state.automaticSegmentRetries = 0;
       await pumpNextSegment();
     } finally {
       if (state.currentRequest === controller) {
@@ -1437,54 +1284,35 @@ export function createNarrationSession(client) {
 
     if (event.type === "audio.delta") {
       const chunk = Buffer.from(event.delta || "", "base64");
-      state.currentSegmentBytes += chunk.length;
-      state.totalBytes += chunk.length;
 
       if (client.readyState === WebSocketConnection.OPEN) {
         client.send(chunk, { binary: true });
       }
-
-      reportBytes(false);
       return;
     }
 
     if (event.type === "audio.done") {
       state.waitingForAudioDone = false;
-      reportBytes(true);
 
       sendJsonWs(client, {
         type: "segmentDone",
         index: state.segmentIndex + 1,
-        totalSegments: state.segments.length,
-        traceId: event.trace_id || null,
-        bytes: state.currentSegmentBytes
+        totalSegments: state.segments.length
       });
 
       state.segmentIndex += 1;
+      state.automaticSegmentRetries = 0;
       await pumpNextSegment();
       return;
     }
 
     if (event.type === "audio.clear") {
-      sendJsonWs(client, { type: "cleared" });
       return;
     }
 
     if (event.type === "error") {
       throw new Error(event.message || "xAI returned an unknown TTS error.");
     }
-  }
-
-  function reportBytes(force) {
-    const now = Date.now();
-    if (!force && now - state.lastByteReportAt < 500) return;
-    state.lastByteReportAt = now;
-
-    sendJsonWs(client, {
-      type: "bytes",
-      totalBytes: state.totalBytes,
-      currentSegmentBytes: state.currentSegmentBytes
-    });
   }
 
   function finish() {
@@ -1494,11 +1322,7 @@ export function createNarrationSession(client) {
     state.pauseRequested = false;
     state.paused = false;
     state.recoverableError = null;
-    sendJsonWs(client, {
-      type: "complete",
-      totalBytes: state.totalBytes,
-      totalSegments: state.segments.length
-    });
+    sendJsonWs(client, { type: "complete" });
 
     closeUpstream();
   }
@@ -1537,6 +1361,17 @@ export function createNarrationSession(client) {
       && state.waitingForAudioDone
       && state.segmentIndex < state.segments.length) {
       state.waitingForAudioDone = false;
+
+      if (state.automaticSegmentRetries < AUTOMATIC_SEGMENT_RETRIES) {
+        state.automaticSegmentRetries += 1;
+        sendJsonWs(client, {
+          type: "status",
+          message: `Segment ${state.segmentIndex + 1} failed; retrying automatically...`
+        });
+        sendSegment(state.segments[state.segmentIndex]).catch((retryError) => fail(retryError));
+        return;
+      }
+
       state.pauseRequested = false;
       state.paused = false;
       state.recoverableError = error;
@@ -1589,7 +1424,7 @@ function sanitizeOptions(raw) {
             ? ""
             : "eve";
   const voice = sanitizeVoice(raw.voice, defaultVoice, provider);
-  const language = sanitizeLanguage(raw.language, provider, voice);
+  const language = sanitizeLanguage(raw.language, provider);
   const speed = clamp(Number(raw.speed || 1), 0.7, 1.5);
   const optimizeStreamingLatency = raw.optimizeStreamingLatency ? 1 : 0;
   const textNormalization = provider === "xai" && Boolean(raw.textNormalization);
@@ -1656,7 +1491,7 @@ function sanitizeProvider(rawProvider) {
 function sanitizeVoice(rawVoice, fallback, provider) {
   const voice = String(rawVoice || fallback).trim();
   if (provider === "google") {
-    return normalizeGeminiVoiceName(voice) || fallback;
+    return GEMINI_TTS_VOICES.has(voice) ? voice : fallback;
   }
 
   if (provider === "gemini") {
@@ -1670,22 +1505,12 @@ function sanitizeVoice(rawVoice, fallback, provider) {
   return (voice || fallback).toLowerCase();
 }
 
-function sanitizeLanguage(rawLanguage, provider, voice) {
+function sanitizeLanguage(rawLanguage, provider) {
   const language = String(rawLanguage || "auto").trim();
   if (provider === "gemini") return language || "auto";
   if (provider !== "google") return language || "auto";
   if (language && language !== "auto") return language;
-  return deriveGoogleLanguageCode(voice) || "en-US";
-}
-
-function normalizeGeminiVoiceName(voice) {
-  const legacyChirpPrefix = "-Chirp3-HD-";
-  const legacyChirpIndex = voice.indexOf(legacyChirpPrefix);
-  const candidate = legacyChirpIndex >= 0
-    ? voice.slice(legacyChirpIndex + legacyChirpPrefix.length)
-    : voice;
-
-  return GEMINI_TTS_VOICES.has(candidate) ? candidate : "";
+  return "en-US";
 }
 
 function getProviderAudioEncoding(optionsOrProvider) {
@@ -1846,11 +1671,11 @@ async function synthesizeOpenRouterSpeech(segment, options, apiKey, signal) {
   });
 }
 
-async function synthesizeGoogleSpeech(text, options, credential, signal) {
+async function synthesizeGoogleSpeech(text, options, signal) {
   const url = new URL(GOOGLE_TTS_URL);
   const headers = {
     "Content-Type": "application/json; charset=utf-8",
-    Authorization: await resolveGoogleAuthorizationHeader(credential, signal)
+    Authorization: `Bearer ${await getGoogleOAuthAccessToken(signal)}`
   };
 
   const requestBody = {
@@ -1993,146 +1818,12 @@ function describeGeminiPace(speed) {
   return "";
 }
 
-async function resolveGoogleAuthorizationHeader(credential, signal) {
-  const trimmedCredential = String(credential || "").trim();
-  if (!trimmedCredential) {
-    const token = await getGoogleOAuthAccessToken(signal);
-    return `Bearer ${token}`;
-  }
-
-  if (isGoogleApiKey(trimmedCredential)) {
-    throw new Error("Google Cloud TTS does not accept API keys. Paste an OAuth access token or a service account JSON key instead.");
-  }
-
-  const serviceAccount = parseGoogleServiceAccount(trimmedCredential);
-  if (serviceAccount) {
-    const token = await getGoogleServiceAccountAccessToken(serviceAccount, signal);
-    return `Bearer ${token}`;
-  }
-
-  return /^Bearer\s+/i.test(trimmedCredential)
-    ? trimmedCredential.replace(/^Bearer\s+/i, "Bearer ")
-    : `Bearer ${trimmedCredential}`;
-}
-
-function parseGoogleServiceAccount(credential) {
-  if (!credential.startsWith("{")) return null;
-
-  let parsed;
-  try {
-    parsed = JSON.parse(credential);
-  } catch {
-    throw new Error("Google service account JSON could not be parsed. Paste a valid JSON key, or paste an OAuth access token.");
-  }
-
-  if (parsed.type !== "service_account") {
-    throw new Error("Google JSON credential is not a service account key. Paste a service account JSON key, or paste an OAuth access token.");
-  }
-
-  if (!parsed.client_email || !parsed.private_key) {
-    throw new Error("Google service account JSON is missing client_email or private_key.");
-  }
-
-  return {
-    clientEmail: parsed.client_email,
-    privateKey: parsed.private_key,
-    privateKeyId: parsed.private_key_id || "",
-    tokenUri: parsed.token_uri || GOOGLE_TOKEN_URL
-  };
-}
-
-async function getGoogleServiceAccountAccessToken(serviceAccount, signal) {
-  const cacheKey = `${serviceAccount.clientEmail}:${serviceAccount.privateKeyId || hashString(serviceAccount.privateKey)}`;
-  const cached = googleAccessTokenCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now() + 60_000) {
-    return cached.accessToken;
-  }
-
-  const assertion = createGoogleServiceAccountJwt(serviceAccount);
-  const response = await fetch(serviceAccount.tokenUri, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion
-    }),
-    signal
-  });
-
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
-
-  if (!response.ok) {
-    const message = body?.error_description || body?.error || `${response.status} ${response.statusText}`;
-    throw new Error(`Google OAuth token request failed: ${message}`);
-  }
-
-  if (!body?.access_token) {
-    throw new Error("Google OAuth token response did not include an access token.");
-  }
-
-  const expiresIn = Number(body.expires_in || 3600);
-  googleAccessTokenCache.set(cacheKey, {
-    accessToken: body.access_token,
-    expiresAt: Date.now() + Math.max(60, expiresIn - 30) * 1000
-  });
-
-  return body.access_token;
-}
-
-function createGoogleServiceAccountJwt(serviceAccount) {
-  const now = Math.floor(Date.now() / 1000);
-  const header = {
-    alg: "RS256",
-    typ: "JWT"
-  };
-
-  if (serviceAccount.privateKeyId) {
-    header.kid = serviceAccount.privateKeyId;
-  }
-
-  const claims = {
-    iss: serviceAccount.clientEmail,
-    scope: GOOGLE_OAUTH_SCOPE,
-    aud: serviceAccount.tokenUri,
-    exp: now + 3600,
-    iat: now
-  };
-
-  const signingInput = `${base64UrlJson(header)}.${base64UrlJson(claims)}`;
-  const signature = crypto.sign("RSA-SHA256", Buffer.from(signingInput), serviceAccount.privateKey);
-  return `${signingInput}.${base64Url(signature)}`;
-}
-
-function base64UrlJson(value) {
-  return base64Url(Buffer.from(JSON.stringify(value), "utf8"));
-}
-
 function base64Url(value) {
   return Buffer.from(value)
     .toString("base64")
     .replace(/=/g, "")
     .replace(/\+/g, "-")
     .replace(/\//g, "_");
-}
-
-function hashString(value) {
-  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
-
-function isGoogleApiKey(credential) {
-  return /^AIza[0-9A-Za-z_-]+$/.test(credential);
-}
-
-function deriveGoogleLanguageCode(voice) {
-  const match = String(voice || "").match(/^([a-z]{2,3}-[A-Z]{2})-/);
-  return match?.[1] || "";
 }
 
 function providerLabel(provider) {
@@ -2142,15 +1833,6 @@ function providerLabel(provider) {
   if (provider === "resemble") return "Resemble.ai";
   if (provider === "minimax") return "MiniMax";
   return "xAI";
-}
-
-function supportsSpeechOutput(model) {
-  const modalities = [
-    ...(model?.architecture?.output_modalities || []),
-    ...(model?.output_modalities || []),
-    ...(model?.modalities?.output || [])
-  ].map((value) => String(value).toLowerCase());
-  return modalities.includes("speech") || modalities.includes("audio") || /tts|speech|voice/i.test(`${model?.id || ""} ${model?.name || ""}`);
 }
 
 function inferOpenRouterVoices(model) {
@@ -2301,14 +1983,66 @@ function splitFixed(text, maxLength) {
   return parts;
 }
 
-function normalizeText(text) {
-  return text
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\t\f\v]+/g, " ")
-    .replace(/[\u0000-\u0008\u000e-\u001f\u007f]/g, "")
-    .replace(/[ \u00a0]{2,}/g, " ")
+export function normalizeText(text) {
+  const safeScalars = [];
+  const source = String(text).replace(/\r\n?/g, "\n");
+
+  for (const scalar of source) {
+    const codePoint = scalar.codePointAt(0);
+
+    if (codePoint === 0x0085 || codePoint === 0x2028 || codePoint === 0x2029) {
+      safeScalars.push("\n");
+      continue;
+    }
+
+    if (codePoint === 0x0009 || codePoint === 0x000b || codePoint === 0x000c) {
+      safeScalars.push(" ");
+      continue;
+    }
+
+    // Copy/paste sources often use these as invisible word boundaries. A real
+    // space avoids accidentally joining two words after the marker is removed.
+    if (codePoint === 0x200b || codePoint === 0xfeff) {
+      safeScalars.push(" ");
+      continue;
+    }
+
+    if (isTextLayoutControl(codePoint) || isUnsafeTextCodePoint(codePoint)) continue;
+    safeScalars.push(scalar);
+  }
+
+  return safeScalars.join("")
+    .normalize("NFC")
+    .replace(/\p{Zs}+/gu, " ")
     .replace(/\n{4,}/g, "\n\n\n")
     .trim();
+}
+
+function isTextLayoutControl(codePoint) {
+  return codePoint === 0x00ad
+    || codePoint === 0x061c
+    || codePoint === 0x180e
+    || codePoint === 0x200e
+    || codePoint === 0x200f
+    || (codePoint >= 0x202a && codePoint <= 0x202e)
+    || (codePoint >= 0x2060 && codePoint <= 0x206f);
+}
+
+function isUnsafeTextCodePoint(codePoint) {
+  const isControl = (codePoint < 0x20 && codePoint !== 0x0a)
+    || (codePoint >= 0x7f && codePoint <= 0x9f);
+  const isSurrogate = codePoint >= 0xd800 && codePoint <= 0xdfff;
+  const isPrivateUse = (codePoint >= 0xe000 && codePoint <= 0xf8ff)
+    || (codePoint >= 0xf0000 && codePoint <= 0xffffd)
+    || (codePoint >= 0x100000 && codePoint <= 0x10fffd);
+  const isNoncharacter = (codePoint >= 0xfdd0 && codePoint <= 0xfdef)
+    || (codePoint & 0xffff) === 0xfffe
+    || (codePoint & 0xffff) === 0xffff;
+  const isAnnotationOrReplacement = codePoint >= 0xfff9 && codePoint <= 0xfffd;
+  const isUnicodeTag = codePoint >= 0xe0000 && codePoint <= 0xe007f;
+
+  return isControl || isSurrogate || isPrivateUse || isNoncharacter
+    || isAnnotationOrReplacement || isUnicodeTag;
 }
 
 function connectXaiWebSocket(url, apiKey) {
@@ -2598,20 +2332,27 @@ function encodeFrame(payload, opcode, masked) {
 async function serveStatic(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
-  const decodedPath = decodeURIComponent(requestedPath);
-  const absolutePath = path.resolve(publicDir, `.${decodedPath}`);
+  let resolved;
+  try {
+    resolved = resolveStaticFilePath(requestedPath);
+  } catch {
+    sendText(res, 400, "Malformed request path");
+    return;
+  }
 
-  if (!absolutePath.startsWith(publicDir)) {
+  if (!resolved.contained) {
     sendText(res, 403, "Forbidden");
     return;
   }
 
   try {
-    const data = await fs.readFile(absolutePath);
-    const ext = path.extname(absolutePath).toLowerCase();
+    const data = await fs.readFile(resolved.absolutePath);
+    const ext = path.extname(resolved.absolutePath).toLowerCase();
     res.writeHead(200, {
       "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
-      "Cache-Control": "no-store"
+      "Cache-Control": resolved.decodedPath.startsWith("/assets/")
+        ? "public, max-age=31536000, immutable"
+        : "no-cache"
     });
     res.end(data);
   } catch (error) {
@@ -2622,6 +2363,16 @@ async function serveStatic(req, res) {
 
     throw error;
   }
+}
+
+export function resolveStaticFilePath(requestedPath, root = publicDir) {
+  const decodedPath = decodeURIComponent(requestedPath);
+  const absolutePath = path.resolve(root, `.${decodedPath}`);
+  const relativePath = path.relative(root, absolutePath);
+  const contained = relativePath !== ".."
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath);
+  return { decodedPath, absolutePath, contained };
 }
 
 function sendJson(res, status, body) {

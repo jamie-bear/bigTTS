@@ -24,14 +24,11 @@ export interface AppState {
   resembleVoices: VoiceClone[];
   googleOAuth: GoogleOAuthStatus;
   providerBalance: ProviderBalance | null;
-  balanceLoading: boolean;
-  balanceError: string;
   phase: NarrationPhase;
   status: string;
   currentSegment: number;
   totalSegments: number;
   progress: number;
-  bufferSeconds: number;
   stitchedAudio: StitchedAudio | null;
   audioAvailable: boolean;
   segmentFailure: SegmentFailure | null;
@@ -68,14 +65,11 @@ export function createInitialState(): AppState {
     resembleVoices: [],
     googleOAuth: { configured: false, connected: false, redirectUri: "", updatedAt: null },
     providerBalance: null,
-    balanceLoading: false,
-    balanceError: "",
     phase: "idle",
     status: "Idle",
     currentSegment: 0,
     totalSegments: 0,
     progress: 0,
-    bufferSeconds: 0,
     stitchedAudio: null,
     audioAvailable: false,
     segmentFailure: null,
@@ -112,8 +106,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         language: config.defaultLanguage,
         segmentChars,
         providerBalance: null,
-        balanceLoading: false,
-        balanceError: "",
         status: state.phase === "idle" ? "Idle" : state.status
       };
     }

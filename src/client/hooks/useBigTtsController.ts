@@ -26,7 +26,6 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
   const stateRef = useRef(state);
   const audioEngineRef = useRef<AudioEngine | null>(null);
   const sessionRef = useRef<NarrationSession | null>(null);
-  const discoveryAbortRef = useRef<AbortController | null>(null);
   const balanceRequestRef = useRef(0);
   stateRef.current = state;
 
@@ -39,8 +38,6 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
         const phase = stateRef.current.phase;
         if (phase !== "completed" && phase !== "stopped" && phase !== "error" && phase !== "paused" && phase !== "recoverable") setStatus(message);
       },
-      onBufferChange: (bufferSeconds) => dispatch({ type: "patch", patch: { bufferSeconds } }),
-      onLevel: () => { /* No waveform display; AudioEngine's callback contract stays unchanged. */ },
       onAudioAvailable: () => dispatch({ type: "patch", patch: { audioAvailable: true } })
     });
     return () => {
@@ -67,7 +64,14 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     const handleMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.data?.type !== "google-oauth") return;
       if (event.data.ok) void refreshGoogle();
-      else setStatus(event.data.message || "Google OAuth failed.");
+      else {
+        const message = event.data.message || "Google OAuth failed.";
+        dispatch({
+          type: "patch",
+          patch: { googleOAuth: { ...stateRef.current.googleOAuth, connected: false, error: message } }
+        });
+        setStatus(message);
+      }
     };
     window.addEventListener("message", handleMessage);
     return () => { controller.abort(); window.removeEventListener("message", handleMessage); };
@@ -80,19 +84,18 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     const requestId = ++balanceRequestRef.current;
     if (!PROVIDERS[provider].supportsBalance) return;
     if (!apiKey) {
-      dispatch({ type: "patch", patch: { providerBalance: null, balanceLoading: false, balanceError: "" } });
+      dispatch({ type: "patch", patch: { providerBalance: null } });
       return;
     }
-    dispatch({ type: "patch", patch: { balanceLoading: true, balanceError: "" } });
     try {
       const providerBalance = await api.providerBalance(provider, apiKey, signal);
       const latest = stateRef.current;
       if (signal?.aborted || requestId !== balanceRequestRef.current || latest.provider !== provider || latest.credentials[provider].trim() !== apiKey) return;
-      dispatch({ type: "patch", patch: { providerBalance, balanceLoading: false, balanceError: "" } });
-    } catch (error) {
+      dispatch({ type: "patch", patch: { providerBalance } });
+    } catch {
       const latest = stateRef.current;
       if (signal?.aborted || requestId !== balanceRequestRef.current || latest.provider !== provider || latest.credentials[provider].trim() !== apiKey) return;
-      dispatch({ type: "patch", patch: { providerBalance: null, balanceLoading: false, balanceError: errorMessage(error) } });
+      dispatch({ type: "patch", patch: { providerBalance: null } });
     }
   }, []);
 
@@ -103,9 +106,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
   }, [refreshBalance, state.credentials, state.provider]);
 
   useEffect(() => {
-    discoveryAbortRef.current?.abort();
     const controller = new AbortController();
-    discoveryAbortRef.current = controller;
     const timer = window.setTimeout(async () => {
       const current = stateRef.current;
       const key = current.credentials[current.provider].trim();
@@ -144,6 +145,23 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     }, state.credentials[state.provider] ? 450 : 0);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [state.provider, state.credentials, setStatus]);
+
+  const refreshMinimaxVoices = useCallback(async () => {
+    const current = stateRef.current;
+    const apiKey = current.credentials.minimax.trim();
+    if (!apiKey) return setStatus("Add your MiniMax API key before refreshing custom voices.");
+    dispatch({ type: "patch", patch: { operationBusy: true } });
+    try {
+      const remote = (await api.minimaxVoices(apiKey)).voices || [];
+      const voices = mergeVoices(stateRef.current.minimaxVoices, remote);
+      writeVoiceClones("minimaxVoiceClones", voices);
+      dispatch({ type: "patch", patch: { minimaxVoices: voices, voice: stateRef.current.voice || voices[0]?.id || "", status: `Loaded ${voices.length.toLocaleString()} MiniMax custom voice${voices.length === 1 ? "" : "s"}.` } });
+    } catch (error) {
+      setStatus(`MiniMax voice refresh failed: ${errorMessage(error)}`);
+    } finally {
+      dispatch({ type: "patch", patch: { operationBusy: false } });
+    }
+  }, [setStatus]);
 
   const providerConfig = PROVIDERS[state.provider];
   const openrouterBaseVoices = state.openrouterVoiceOptions[state.openrouterModel] || providerConfig.voices;
@@ -191,7 +209,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     dispatch({ type: "patch", patch: { minimaxModel: model } });
   }, []);
 
-  const saveMinimaxClone = useCallback(async (values: { name: string; previewText: string; languageModel: string; promptText: string; validationText: string; source?: File; prompt?: File }) => {
+  const saveMinimaxClone = useCallback(async (values: { name: string; languageModel: string; promptText: string; validationText: string; source?: File; prompt?: File }) => {
     const current = stateRef.current;
     const apiKey = current.credentials.minimax.trim();
     if (!apiKey) return setStatus("Add your MiniMax API key before creating voice clones.");
@@ -202,7 +220,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     dispatch({ type: "patch", patch: { operationBusy: true } });
     try {
       const payload = {
-        apiKey, name: values.name.trim(), model: current.minimaxModel, previewText: values.previewText.trim(),
+        apiKey, name: values.name.trim(), model: current.minimaxModel,
         promptText: values.promptText.trim(), validationText: values.validationText.trim(), languageModel: values.languageModel,
         sourceAudio: await fileToBase64(values.source), sourceFilename: values.source.name,
         sourceContentType: values.source.type || "application/octet-stream", promptAudio: values.prompt ? await fileToBase64(values.prompt) : "",
@@ -244,14 +262,14 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     if (event.type === "meta") {
       audioEngineRef.current?.configure(event.audioEncoding, event.sampleRate, event.channels);
       dispatch({ type: "patch", patch: { totalSegments: event.totalSegments, currentSegment: 0, progress: 0, status: `Prepared ${event.totalSegments} streaming segments.` } });
-    } else if (event.type === "status" || event.type === "waiting") setStatus(event.message);
+    } else if (event.type === "status") setStatus(event.message);
     else if (event.type === "segment") {
       audioEngineRef.current?.beginSegment(event.index);
       stateRef.current = { ...stateRef.current, phase: "generating" };
       dispatch({ type: "patch", patch: { phase: "generating", currentSegment: event.index, totalSegments: event.totalSegments, progress: ((event.index - 1) / event.totalSegments) * 100, segmentFailure: null, status: `Generating segment ${event.index}...` } });
     } else if (event.type === "segmentDone") {
-      const stitchedAudio = audioEngineRef.current?.finishSegment(event.index) || null;
-      dispatch({ type: "patch", patch: { currentSegment: event.index, totalSegments: event.totalSegments, progress: (event.index / event.totalSegments) * 100, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: `Buffered segment ${event.index}.` } });
+      audioEngineRef.current?.finishSegment(event.index);
+      dispatch({ type: "patch", patch: { currentSegment: event.index, totalSegments: event.totalSegments, progress: (event.index / event.totalSegments) * 100, status: `Buffered segment ${event.index}.` } });
       void refreshBalance();
     } else if (event.type === "pausePending") {
       stateRef.current = { ...stateRef.current, phase: "pausing" };
@@ -339,8 +357,8 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       }
     });
     sessionRef.current = session;
-    session.start({ type: "start", apiKey, text: current.text.trim(), options }, () => ({ paused: audioRef.current?.paused ?? true, bufferedAheadSeconds: audioEngineRef.current?.bufferedAheadSeconds() ?? 0 }));
-  }, [audioRef, handleServerEvent, refreshGoogle, setStatus]);
+    session.start({ type: "start", apiKey, text: current.text.trim(), options });
+  }, [handleServerEvent, refreshGoogle, setStatus]);
 
   const stopNarration = useCallback(() => {
     sessionRef.current?.cancel();
@@ -397,9 +415,13 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
   const stats = useMemo(() => {
     const chars = state.text.length;
     const price = providerConfig.costPerMillionChars;
-    const providerName = providerConfig.label.split(/[:—]/)[0].trim();
-    return { chars, cost: price ? `$${((chars / 1_000_000) * price).toFixed(3)} estimated` : `${providerName} pricing varies by model` };
-  }, [providerConfig, state.text.length]);
+    const segments = chars ? Math.ceil(chars / Math.max(1, state.segmentChars)) : 0;
+    return {
+      chars,
+      segments,
+      cost: price === undefined ? null : `$${((chars / 1_000_000) * price).toFixed(3)} estimated`
+    };
+  }, [providerConfig.costPerMillionChars, state.segmentChars, state.text.length]);
 
   return {
     state, providerConfig, voiceOptions, hasVoiceGenderMetadata, stats,
@@ -425,17 +447,26 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       loadSample: () => dispatch({ type: "patch", patch: { text: SAMPLE_TEXT } }),
       clearText: () => dispatch({ type: "patch", patch: { text: "" } }),
       loadTextFile: async (file: File) => dispatch({ type: "patch", patch: { text: await file.text(), status: `Loaded ${file.name}.` } }),
-      saveMinimaxClone, deleteMinimaxClone, renameMinimaxClone,
+      saveMinimaxClone, refreshMinimaxVoices, deleteMinimaxClone, renameMinimaxClone,
       connectGoogle, disconnectGoogle, refreshGoogle, startNarration, pauseGeneration, resumeGeneration, retryFailedSegment, skipFailedSegment, stopNarration, download
     }
   };
 }
 
 function mergeVoices(local: VoiceClone[], remote: VoiceClone[]) {
-  const merged = new Map(local.map((voice) => [voice.id, voice]));
+  const merged = new Map(local.map((voice) => [voice.id, {
+    id: voice.id,
+    name: voice.name || voice.id,
+    ...(voice.model ? { model: voice.model } : {})
+  }]));
   remote.forEach((voice) => {
     const saved = merged.get(voice.id);
-    merged.set(voice.id, { ...voice, ...saved, name: saved?.name || voice.name || voice.id });
+    const model = saved?.model || voice.model;
+    merged.set(voice.id, {
+      id: voice.id,
+      name: saved?.name || voice.name || voice.id,
+      ...(model ? { model } : {})
+    });
   });
   return [...merged.values()];
 }

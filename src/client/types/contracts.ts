@@ -83,12 +83,6 @@ export interface StartNarrationCommand {
   options: NarrationOptions;
 }
 
-export interface TelemetryCommand {
-  type: "telemetry";
-  paused: boolean;
-  bufferedAheadSeconds: number;
-}
-
 export interface OpenRouterErrorDetails {
   status?: number;
   code?: string;
@@ -110,11 +104,11 @@ export interface SegmentFailure {
   details?: OpenRouterErrorDetails;
 }
 
-export type ClientCommand = StartNarrationCommand | TelemetryCommand | { type: "pause" | "resume" | "retrySegment" | "skipSegment" | "cancel" };
+export type ClientCommand = StartNarrationCommand | { type: "pause" | "resume" | "retrySegment" | "skipSegment" | "cancel" };
 
 export type ServerEvent =
-  | { type: "meta"; provider: ProviderId; audioEncoding: AudioEncoding; sampleRate: number; channels: number; totalChars: number; totalSegments: number; segmentChars: number }
-  | { type: "status" | "waiting"; message: string }
+  | { type: "meta"; audioEncoding: AudioEncoding; sampleRate: number; channels: number; totalSegments: number }
+  | { type: "status"; message: string }
   | { type: "segment"; index: number; totalSegments: number; boundaryBefore?: GeminiBoundary; boundaryAfter?: GeminiBoundary }
   | { type: "segmentDone"; index: number; totalSegments: number; generationId?: string; attempts?: number }
   | { type: "pausePending"; currentSegment: number; totalSegments: number }
@@ -122,7 +116,6 @@ export type ServerEvent =
   | { type: "resumed"; nextSegment: number; totalSegments: number }
   | { type: "segmentFailed"; index: number; totalSegments: number; message: string; details?: OpenRouterErrorDetails }
   | { type: "segmentRetrying" | "segmentSkipped"; index: number; totalSegments: number }
-  | { type: "bytes"; totalBytes: number }
   | { type: "complete" }
   | { type: "cancelled" | "error"; message?: string };
 

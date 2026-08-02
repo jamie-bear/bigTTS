@@ -16,4 +16,19 @@ describe("storage compatibility", () => {
     localStorage.setItem("minimaxVoiceClones", "not-json");
     expect(readVoiceClones("minimaxVoiceClones")).toEqual([]);
   });
+
+  it("tolerates legacy clone records and removes unused metadata when persisted", () => {
+    localStorage.setItem("minimaxVoiceClones", JSON.stringify([{
+      id: "voice-1",
+      name: "Narrator",
+      model: "speech-2.8-hd",
+      previewAudio: "obsolete",
+      providerResponse: { unused: true }
+    }]));
+
+    const voices = readVoiceClones("minimaxVoiceClones");
+    expect(voices).toEqual([{ id: "voice-1", name: "Narrator", model: "speech-2.8-hd" }]);
+    writeVoiceClones("minimaxVoiceClones", voices);
+    expect(JSON.parse(localStorage.getItem("minimaxVoiceClones") || "[]")).toEqual(voices);
+  });
 });

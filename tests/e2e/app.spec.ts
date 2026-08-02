@@ -43,7 +43,7 @@ test.beforeEach(async ({ page, context }) => {
           return;
         }
         const totalSegments = command.text === "pause-flow" || command.text === "recovery-flow" ? 2 : 1;
-        socket.send(JSON.stringify({ type: "meta", provider: command.options.provider, audioEncoding: "mpeg", sampleRate: 24000, channels: 1, totalChars: 11, totalSegments, segmentChars: command.options.segmentChars }));
+        socket.send(JSON.stringify({ type: "meta", audioEncoding: "mpeg", sampleRate: 24000, channels: 1, totalSegments }));
         socket.send(JSON.stringify({ type: "segment", index: 1, totalSegments }));
         socket.send(Buffer.from([0xff, 0xfb, 0x90, 0x64]));
         if (command.text === "partial" || command.text === "pause-flow") return;

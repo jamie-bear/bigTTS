@@ -41,6 +41,24 @@ const response = () => new Response(JSON.stringify({
 describe("server narration pause state", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("rejects direct Google credentials when no local OAuth refresh token exists", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new FakeClient();
+    const session = createNarrationSession(client);
+
+    session.handleClientMessage({
+      type: "start",
+      apiKey: JSON.stringify({ type: "service_account", private_key: "obsolete" }),
+      text: "Google OAuth is required.",
+      options: { ...options, provider: "google", voice: "Enceladus" }
+    });
+
+    await vi.waitFor(() => expect(client.events("error")).toHaveLength(1));
+    expect(client.events("error")[0].message).toBe("Connect Google before starting narration.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("can pause before the first provider request and resume from segment one", async () => {
     let resolveRequest;
     const fetchMock = vi.fn(() => new Promise((resolve) => { resolveRequest = resolve; }));
@@ -87,7 +105,7 @@ describe("server narration pause state", () => {
     session.cancel("Test finished.");
   });
 
-  it("keeps a rejected OpenRouter segment recoverable and retries it in place", async () => {
+  it("automatically retries a rejected OpenRouter segment before showing recovery controls", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
         error: {
@@ -102,6 +120,30 @@ describe("server narration pause state", () => {
     const session = createNarrationSession(client);
 
     session.handleClientMessage({ type: "start", apiKey: "test-key", text: "A segment that needs another attempt.", options: openRouterOptions });
+    await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(client.events("status").at(-1).message).toBe("Segment 1 failed; retrying automatically...");
+    expect(client.events("segmentFailed")).toHaveLength(0);
+    expect(client.events("segmentDone")[0]).toMatchObject({ index: 1, generationId: "gen-retried" });
+  });
+
+  it("keeps a rejected OpenRouter segment recoverable after its automatic retry fails", async () => {
+    const rejection = (requestId) => new Response(JSON.stringify({
+      error: {
+        code: 400,
+        message: "Provider returned 400",
+        metadata: { error_type: "content_policy_violation", provider_code: "PROHIBITED_CONTENT" }
+      }
+    }), { status: 400, headers: { "x-request-id": requestId } });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(rejection("req-failed-1"))
+      .mockResolvedValueOnce(rejection("req-failed-2"))
+      .mockResolvedValueOnce(new Response(new Uint8Array([0, 0, 1, 0]), { status: 200, headers: { "Content-Type": "audio/pcm", "x-generation-id": "gen-manual-retry" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new FakeClient();
+    const session = createNarrationSession(client);
+
+    session.handleClientMessage({ type: "start", apiKey: "test-key", text: "A segment that needs manual recovery.", options: openRouterOptions });
     await vi.waitFor(() => expect(client.events("segmentFailed")).toHaveLength(1));
     expect(client.events("segmentFailed")[0]).toMatchObject({
       index: 1,
@@ -110,17 +152,18 @@ describe("server narration pause state", () => {
         status: 400,
         errorType: "content_policy_violation",
         providerCode: "PROHIBITED_CONTENT",
-        requestId: "req-failed",
+        requestId: "req-failed-2",
         attempts: 1
       }
     });
     expect(client.events("error")).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     session.handleClientMessage({ type: "retrySegment" });
     await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(client.events("segmentRetrying")[0].index).toBe(1);
-    expect(client.events("segmentDone")[0]).toMatchObject({ index: 1, generationId: "gen-retried" });
+    expect(client.events("segmentDone")[0]).toMatchObject({ index: 1, generationId: "gen-manual-retry" });
   });
 
   it("can skip a rejected OpenRouter segment without ending the session", async () => {
@@ -134,6 +177,6 @@ describe("server narration pause state", () => {
     session.handleClientMessage({ type: "skipSegment" });
     await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
     expect(client.events("segmentSkipped")[0]).toMatchObject({ index: 1, totalSegments: 1 });
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

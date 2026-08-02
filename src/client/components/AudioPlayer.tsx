@@ -5,7 +5,7 @@ import { Icon } from "./ui/Icon";
 
 const RATES = [0.75, 1, 1.25, 1.5, 2];
 
-export function AudioPlayer({ audioRef, available, bufferSeconds }: { audioRef: RefObject<HTMLAudioElement | null>; available: boolean; bufferSeconds: number }) {
+export function AudioPlayer({ audioRef, available }: { audioRef: RefObject<HTMLAudioElement | null>; available: boolean }) {
   const playback = useAudioPlayback(audioRef);
   const { currentTime, duration, bufferedEnd, seekable } = playback;
   const span = seekable ? duration : 0;
@@ -39,6 +39,6 @@ export function AudioPlayer({ audioRef, available, bufferSeconds }: { audioRef: 
         </select>
       </label>
     </div>
-    <p className="player-caption">Playback buffer — {Math.round(bufferSeconds)}s</p>
+    <p className="player-caption">Playback buffer — {Math.round(playback.bufferedAhead)}s</p>
   </div>;
 }

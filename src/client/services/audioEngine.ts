@@ -2,8 +2,6 @@ import type { AudioEncoding, StitchedAudio } from "../types/contracts";
 
 interface AudioEngineEvents {
   onStatus: (message: string) => void;
-  onBufferChange: (seconds: number) => void;
-  onLevel: (level: number) => void;
   onAudioAvailable: () => void;
 }
 
@@ -11,7 +9,6 @@ export class AudioEngine {
   private mediaSource: MediaSource | null = null;
   private sourceBuffer: SourceBuffer | null = null;
   private appendQueue: ArrayBuffer[] = [];
-  private audioChunks: ArrayBuffer[] = [];
   private segmentAudioChunks: ArrayBuffer[][] = [];
   private activeSegmentIndex = -1;
   private completedSegmentCount = 0;
@@ -22,6 +19,7 @@ export class AudioEngine {
   private playbackSourceInstalled = false;
   private pendingPlayableSnapshot: Blob | null = null;
   private sourceReplacementInProgress = false;
+  private audioAvailableReported = false;
   private started = false;
   private encoding: AudioEncoding = "mpeg";
   private sampleRate = 24_000;
@@ -30,9 +28,6 @@ export class AudioEngine {
   constructor(private readonly audio: HTMLAudioElement, private readonly events: AudioEngineEvents) {
     this.audio.addEventListener("ended", this.handlePlaybackEnded);
     this.audio.addEventListener("pause", this.handlePlaybackPaused);
-    for (const event of ["timeupdate", "progress", "pause", "play"]) {
-      this.audio.addEventListener(event, this.reportBuffer);
-    }
   }
 
   reset(initialEncoding: AudioEncoding = "mpeg") {
@@ -40,7 +35,6 @@ export class AudioEngine {
     this.sourceBuffer = null;
     this.mediaSource = null;
     this.revokeUrls();
-    this.audioChunks = [];
     this.segmentAudioChunks = [];
     this.activeSegmentIndex = -1;
     this.completedSegmentCount = 0;
@@ -51,6 +45,7 @@ export class AudioEngine {
     this.playbackSourceInstalled = false;
     this.pendingPlayableSnapshot = null;
     this.sourceReplacementInProgress = false;
+    this.audioAvailableReported = false;
     this.started = true;
 
     if (initialEncoding === "pcm_s16le" || typeof MediaSource === "undefined") {
@@ -98,18 +93,20 @@ export class AudioEngine {
     const segmentIndex = Math.max(0, index - 1);
     if (this.activeSegmentIndex === segmentIndex) this.activeSegmentIndex = -1;
     this.completedSegmentCount = Math.max(this.completedSegmentCount, Math.min(index, this.segmentAudioChunks.length));
-    const stitched = this.snapshotCompleted();
-    if (stitched && (this.encoding === "pcm_s16le" || !this.mediaSource)) this.queuePlayableSnapshot(stitched.blob);
-    return stitched;
+    if (this.encoding === "pcm_s16le" || !this.mediaSource) {
+      const stitched = this.snapshotCompleted();
+      if (stitched) this.queuePlayableSnapshot(stitched.blob);
+    }
   }
 
   push(chunkValue: ArrayBuffer) {
-    const chunk = chunkValue.slice(0);
-    this.audioChunks.push(chunk);
+    const chunk = chunkValue;
     if (this.activeSegmentIndex < 0) this.beginSegment(this.segmentAudioChunks.length + 1);
     this.segmentAudioChunks[this.activeSegmentIndex].push(chunk);
-    this.events.onLevel(1);
-    this.events.onAudioAvailable();
+    if (!this.audioAvailableReported) {
+      this.audioAvailableReported = true;
+      this.events.onAudioAvailable();
+    }
 
     if (this.encoding === "pcm_s16le" || !this.mediaSource) return;
     this.appendQueue.push(chunk);
@@ -139,8 +136,7 @@ export class AudioEngine {
   }
 
   snapshot(): StitchedAudio | null {
-    const segments = this.segmentAudioChunks.filter((segment) => segment.length) || [];
-    const generated = segments.length ? segments : this.audioChunks.length ? [this.audioChunks] : [];
+    const generated = this.segmentAudioChunks.filter((segment) => segment.length);
     if (!generated.length) return null;
     const pcm = this.encoding === "pcm_s16le";
     return {
@@ -170,29 +166,14 @@ export class AudioEngine {
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
-  bufferedAheadSeconds() {
-    if (!this.audio.buffered.length) return 0;
-    const current = this.audio.currentTime || 0;
-    for (let index = 0; index < this.audio.buffered.length; index += 1) {
-      const start = this.audio.buffered.start(index);
-      const end = this.audio.buffered.end(index);
-      if (current >= start && current <= end) return Math.max(0, end - current);
-    }
-    return Math.max(0, this.audio.buffered.end(this.audio.buffered.length - 1) - current);
-  }
-
-  stop() { this.started = false; }
-
   dispose() {
-    this.stop();
+    this.started = false;
     this.revokeUrls();
     this.audio.removeEventListener("ended", this.handlePlaybackEnded);
     this.audio.removeEventListener("pause", this.handlePlaybackPaused);
-    for (const event of ["timeupdate", "progress", "pause", "play"]) this.audio.removeEventListener(event, this.reportBuffer);
     this.sourceBuffer?.removeEventListener("updateend", this.drainAppendQueue);
   }
 
-  private reportBuffer = () => this.events.onBufferChange(this.bufferedAheadSeconds());
   private handlePlaybackPaused = () => {
     if (!this.sourceReplacementInProgress && this.pendingPlayableSnapshot) this.flushPendingSnapshot(this.audio.ended);
   };
@@ -201,7 +182,6 @@ export class AudioEngine {
   private drainAppendQueue = () => {
     if (!this.sourceBuffer || this.sourceBuffer.updating || this.mediaSource?.readyState !== "open") return;
     this.updateMediaDuration();
-    this.reportBuffer();
     if (!this.appendQueue.length) return;
     const next = this.appendQueue.shift();
     if (!next) return;
@@ -271,7 +251,6 @@ export class AudioEngine {
         try { this.audio.currentTime = Math.min(previousTime, this.audio.duration); } catch { /* Metadata can race source replacement. */ }
       }
       cleanupOldUrls();
-      this.reportBuffer();
       if (shouldResume) void this.audio.play().catch(() => {
         if (this.started) this.events.onStatus("Audio is ready. Press play if your browser blocks autoplay.");
       });

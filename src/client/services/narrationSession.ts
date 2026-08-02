@@ -10,12 +10,11 @@ interface NarrationSessionEvents {
 
 export class NarrationSession {
   private socket: WebSocket | null = null;
-  private telemetryTimer: number | null = null;
   private intentionalClose = false;
 
   constructor(private readonly events: NarrationSessionEvents) {}
 
-  start(command: StartNarrationCommand, telemetry: () => Omit<Extract<ClientCommand, { type: "telemetry" }>, "type">) {
+  start(command: StartNarrationCommand) {
     this.dispose();
     this.intentionalClose = false;
     const protocol = location.protocol === "https:" ? "wss" : "ws";
@@ -25,7 +24,6 @@ export class NarrationSession {
     socket.addEventListener("open", () => {
       this.send(command);
       this.events.onOpen();
-      this.telemetryTimer = window.setInterval(() => this.send({ type: "telemetry", ...telemetry() }), 1_000);
     });
     socket.addEventListener("message", (event) => {
       if (typeof event.data === "string") {
@@ -36,7 +34,6 @@ export class NarrationSession {
       }
     });
     socket.addEventListener("close", () => {
-      this.stopTelemetry();
       if (this.socket === socket && !this.intentionalClose) this.events.onClose();
     });
     socket.addEventListener("error", () => this.events.onError("Local stream error."));
@@ -47,7 +44,6 @@ export class NarrationSession {
     if (this.socket?.readyState === WebSocket.OPEN) this.send({ type: "cancel" });
     this.socket?.close();
     this.socket = null;
-    this.stopTelemetry();
   }
 
   pause() { this.send({ type: "pause" }); }
@@ -62,10 +58,5 @@ export class NarrationSession {
 
   private send(command: ClientCommand) {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(command));
-  }
-
-  private stopTelemetry() {
-    if (this.telemetryTimer !== null) window.clearInterval(this.telemetryTimer);
-    this.telemetryTimer = null;
   }
 }

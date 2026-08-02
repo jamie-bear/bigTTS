@@ -5,6 +5,7 @@ import {
   createGeminiNarrationSegments,
   geminiPaceDirective,
   isOpenRouterGemini31Model,
+  prepareGeminiTranscript,
   requestOpenRouterGemini31Speech,
   sanitizeNarratorDirection
 } from "../../src/server/geminiContinuity.js";
@@ -70,6 +71,25 @@ describe("OpenRouter Gemini 3.1 continuity", () => {
     expect(sceneBoundary).toBeGreaterThanOrEqual(0);
     expect(segments[sceneBoundary + 1]?.boundaryBefore).toBe("scene");
     expect(segments[sceneBoundary + 1]?.previousContext).toBe("");
+  });
+
+  it("merges a short pre-scene tail and keeps Markdown structure out of the provider transcript", () => {
+    const lead = "A complete sentence carries the narration forward with enough detail to establish a stable delivery. ".repeat(6);
+    const text = `## 2:04 P.M.\n\n${lead}\n\n"A short exchange."\n\n---\n\n## 2:41 P.M.\n\nThe next scene begins.`;
+    const segments = createGeminiNarrationSegments(text, { targetChars: 500, hardMaxChars: 1000 });
+    const sceneEnd = segments.find((segment) => segment.boundaryAfter === "scene");
+
+    expect(sceneEnd?.text).toContain("A short exchange.");
+    expect(sceneEnd?.text.length).toBeGreaterThanOrEqual(325);
+    expect(prepareGeminiTranscript("## 2:04 P.M.\n\nDialogue.\n\n---\n\n"))
+      .toBe("2:04 P.M.\n\nDialogue.");
+
+    const prompt = buildGemini31NarrationPrompt(sceneEnd, { speed: 1, enhancedContinuity: true });
+    const transcript = prompt.slice(prompt.indexOf("# TRANSCRIPT\n") + "# TRANSCRIPT\n".length);
+    expect(transcript).not.toContain("##");
+    expect(transcript).not.toContain("---");
+    expect(transcript).toContain("2:04 P.M.");
+    expect(transcript).toContain("A short exchange.");
   });
 
   it("builds stable direction with silent context and exact transcript text", () => {

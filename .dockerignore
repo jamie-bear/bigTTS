@@ -8,3 +8,5 @@ playwright-report
 test-results
 .secrets
 .env
+src/*.psd
+src/*.svg

@@ -10,6 +10,7 @@ function Probe() {
     <span data-testid="seekable">{String(playback.seekable)}</span>
     <span data-testid="elapsed">{formatTime(playback.currentTime)}</span>
     <span data-testid="total">{formatTime(playback.duration)}</span>
+    <span data-testid="buffered-ahead">{playback.bufferedAhead}</span>
     <span data-testid="rate">{playback.rate}</span>
     <button type="button" onClick={() => playback.setRate(1.5)}>set rate</button>
   </div>;
@@ -69,6 +70,19 @@ describe("useAudioPlayback", () => {
     fireEvent(audio, new Event("emptied"));
     expect(screen.getByTestId("seekable")).toHaveTextContent("false");
     expect(screen.getByTestId("elapsed")).toHaveTextContent("0:00");
+  });
+
+  it("derives buffered-ahead time from the range containing the playhead", () => {
+    render(<Probe />);
+    const audio = screen.getByTestId("audio");
+    setMediaProperty(audio, "currentTime", 4);
+    Object.defineProperty(audio, "buffered", {
+      configurable: true,
+      value: { length: 1, start: () => 2, end: () => 10 }
+    });
+
+    fireEvent(audio, new Event("progress"));
+    expect(screen.getByTestId("buffered-ahead")).toHaveTextContent("6");
   });
 
   it("sets defaultPlaybackRate alongside playbackRate so a segment reload can't revert the chosen speed", () => {
