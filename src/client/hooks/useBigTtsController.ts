@@ -332,7 +332,8 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       provider: current.provider, voice: current.voice, language: current.language, speed: current.speed,
       segmentChars: current.segmentChars, optimizeStreamingLatency: current.lowLatency, textNormalization: current.textNormalization,
       model: current.provider === "openrouter" ? current.openrouterModel : current.provider === "minimax" ? current.minimaxModel : "",
-      geminiContinuity: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiContinuity,
+      geminiPreviousContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiPreviousContext,
+      geminiFollowingContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiFollowingContext,
       geminiNarratorDirection: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) ? current.geminiNarratorDirection : ""
     };
     const initialPcm = current.provider === "gemini" || current.provider === "google" || current.provider === "resemble" || (current.provider === "openrouter" && isOpenRouterPcmModel(current.openrouterModel));
@@ -435,9 +436,13 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       setSegmentChars: (value: number) => dispatch({ type: "segment", value }),
       setLowLatency: (lowLatency: boolean) => dispatch({ type: "patch", patch: { lowLatency } }),
       setTextNormalization: (textNormalization: boolean) => dispatch({ type: "patch", patch: { textNormalization } }),
-      setGeminiContinuity: (geminiContinuity: boolean) => {
-        sessionStorage.setItem(STORAGE_KEYS.geminiContinuity, String(geminiContinuity));
-        dispatch({ type: "patch", patch: { geminiContinuity } });
+      setGeminiPreviousContext: (geminiPreviousContext: boolean) => {
+        sessionStorage.setItem(STORAGE_KEYS.geminiPreviousContext, String(geminiPreviousContext));
+        dispatch({ type: "patch", patch: { geminiPreviousContext } });
+      },
+      setGeminiFollowingContext: (geminiFollowingContext: boolean) => {
+        sessionStorage.setItem(STORAGE_KEYS.geminiFollowingContext, String(geminiFollowingContext));
+        dispatch({ type: "patch", patch: { geminiFollowingContext } });
       },
       setGeminiNarratorDirection: (geminiNarratorDirection: string) => {
         const value = geminiNarratorDirection.slice(0, 800);

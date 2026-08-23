@@ -23,7 +23,8 @@ const options = {
   optimizeStreamingLatency: false,
   textNormalization: false,
   model: "",
-  geminiContinuity: false,
+  geminiPreviousContext: false,
+  geminiFollowingContext: false,
   geminiNarratorDirection: ""
 };
 
@@ -31,7 +32,8 @@ const openRouterOptions = {
   ...options,
   provider: "openrouter",
   model: "google/gemini-3.1-flash-tts-preview",
-  geminiContinuity: true
+  geminiPreviousContext: true,
+  geminiFollowingContext: true
 };
 
 const response = () => new Response(JSON.stringify({
@@ -127,7 +129,7 @@ describe("server narration pause state", () => {
     expect(client.events("segmentDone")[0]).toMatchObject({ index: 1, generationId: "gen-retried" });
   });
 
-  it("drops Gemini continuity context on the automatic retry", async () => {
+  it("drops both Gemini context directions on the automatic retry", async () => {
     const rejection = new Response(JSON.stringify({
       error: { code: 400, message: "Provider returned 400" }
     }), { status: 400 });

@@ -136,15 +136,19 @@ export function createGeminiNarrationSegments(text, options = {}) {
 
 export function buildGemini31NarrationPrompt(segment, options = {}) {
   const direction = sanitizeNarratorDirection(options.narratorDirection);
-  const enhanced = options.enhancedContinuity !== false;
+  const legacyContextEnabled = options.enhancedContinuity !== false;
+  const includePreviousContext = options.includePreviousContext === undefined
+    ? legacyContextEnabled
+    : options.includePreviousContext !== false;
+  const includeFollowingContext = options.includeFollowingContext === undefined
+    ? legacyContextEnabled
+    : options.includeFollowingContext !== false;
   const internalStart = segment.boundaryBefore !== "start" && !STRONG_BOUNDARIES.has(segment.boundaryBefore);
   const internalEnd = segment.boundaryAfter !== "end" && !STRONG_BOUNDARIES.has(segment.boundaryAfter);
   const cadence = internalStart || internalEnd
     ? "Treat this as part of a continuous performance; do not add an introduction or artificial closing cadence at the chunk boundary."
     : "Use a natural opening or closing cadence only where the document boundary calls for it.";
-  const context = enhanced
-    ? `Previous: ${segment.previousContext || "none"}\nFollowing: ${segment.nextContext || "none"}`
-    : "Previous: none\nFollowing: none";
+  const context = `Previous: ${includePreviousContext ? segment.previousContext || "none" : "none"}\nFollowing: ${includeFollowingContext ? segment.nextContext || "none" : "none"}`;
   const customDirection = direction ? `\nAdditional narrator direction: ${direction}` : "";
 
   return `Synthesize speech. Speak only the text under TRANSCRIPT.

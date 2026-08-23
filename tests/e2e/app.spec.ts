@@ -39,7 +39,7 @@ test.beforeEach(async ({ page, context }) => {
       if (command.type === "start") {
         narrationText = command.text;
         if (command.text === "inspect-gemini-options") {
-          socket.send(JSON.stringify({ type: "status", message: `continuity=${command.options.geminiContinuity}; direction=${command.options.geminiNarratorDirection}` }));
+          socket.send(JSON.stringify({ type: "status", message: `previous=${command.options.geminiPreviousContext}; following=${command.options.geminiFollowingContext}; direction=${command.options.geminiNarratorDirection}` }));
           return;
         }
         const totalSegments = command.text === "pause-flow" || command.text === "recovery-flow" ? 2 : 1;
@@ -158,11 +158,13 @@ test("configures and serializes OpenRouter Gemini 3.1 continuity", async ({ page
   await expect(page.getByLabel("OpenRouter model")).toHaveValue("google/gemini-3.1-flash-tts-preview");
   await expect(page.getByLabel("Segment target")).toHaveValue("500");
   await page.getByText("Gemini continuity", { exact: true }).click();
-  await expect(page.getByLabel("Enhanced continuity")).toBeChecked();
+  await expect(page.getByLabel("Send previous segment context")).toBeChecked();
+  await expect(page.getByLabel("Send following segment context")).toBeChecked();
+  await page.getByLabel("Send previous segment context").uncheck();
   await page.getByLabel("Narrator direction").fill("Warm and restrained.");
   await page.getByLabel("Book or chapter text").fill("inspect-gemini-options");
   await page.getByRole("button", { name: "Start narration" }).click();
-  await expect(page.getByText("continuity=true; direction=Warm and restrained.")).toBeVisible();
+  await expect(page.getByText("previous=false; following=true; direction=Warm and restrained.")).toBeVisible();
 });
 
 test("makes partial stitched audio downloadable before completion and after stop", async ({ page }) => {

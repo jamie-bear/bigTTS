@@ -5,6 +5,8 @@ export const STORAGE_KEYS = {
   provider: "ttsProvider",
   openrouterModel: "openrouterModel",
   geminiContinuity: "openrouterGeminiContinuity",
+  geminiPreviousContext: "openrouterGeminiPreviousContext",
+  geminiFollowingContext: "openrouterGeminiFollowingContext",
   geminiNarratorDirection: "openrouterGeminiNarratorDirection",
   minimaxModel: "minimaxModel",
   minimaxVoiceClones: "minimaxVoiceClones"

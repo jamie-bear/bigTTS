@@ -121,6 +121,26 @@ describe("OpenRouter Gemini 3.1 continuity", () => {
     expect(prompt).not.toContain("Previous.");
   });
 
+  it.each([
+    { includePreviousContext: true, includeFollowingContext: true, previous: true, following: true },
+    { includePreviousContext: true, includeFollowingContext: false, previous: true, following: false },
+    { includePreviousContext: false, includeFollowingContext: true, previous: false, following: true },
+    { includePreviousContext: false, includeFollowingContext: false, previous: false, following: false }
+  ])("controls previous and following context independently: $includePreviousContext/$includeFollowingContext", (settings) => {
+    const prompt = buildGemini31NarrationPrompt({
+      text: "Only this is spoken.",
+      previousContext: "The previous excerpt.",
+      nextContext: "The following excerpt.",
+      boundaryBefore: "sentence",
+      boundaryAfter: "sentence"
+    }, { ...settings, speed: 1 });
+
+    expect(prompt.includes("The previous excerpt.")).toBe(settings.previous);
+    expect(prompt.includes("The following excerpt.")).toBe(settings.following);
+    expect(prompt).toContain(`Previous: ${settings.previous ? "The previous excerpt." : "none"}`);
+    expect(prompt).toContain(`Following: ${settings.following ? "The following excerpt." : "none"}`);
+  });
+
   it("uses document cadence only at true outer boundaries", () => {
     const base = { text: "A passage.", previousContext: "", nextContext: "" };
     const outer = buildGemini31NarrationPrompt({ ...base, boundaryBefore: "start", boundaryAfter: "end" }, { speed: 1 });

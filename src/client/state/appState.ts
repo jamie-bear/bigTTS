@@ -17,7 +17,8 @@ export interface AppState {
   openrouterModel: string;
   openrouterModels: OpenRouterModel[];
   openrouterVoiceOptions: Record<string, SelectOption[]>;
-  geminiContinuity: boolean;
+  geminiPreviousContext: boolean;
+  geminiFollowingContext: boolean;
   geminiNarratorDirection: string;
   minimaxModel: string;
   minimaxVoices: VoiceClone[];
@@ -43,6 +44,7 @@ export function createInitialState(): AppState {
   const credentials = readCredentials();
   const segmentByProvider = Object.fromEntries(providerIds.map((id) => [id, PROVIDERS[id].defaultSegmentChars])) as Record<ProviderId, number>;
   const rememberCredential = Object.fromEntries(providerIds.map((id) => [id, Boolean(sessionStorage.getItem(PROVIDERS[id].storageKey))])) as Record<ProviderId, boolean>;
+  const legacyGeminiContinuity = sessionStorage.getItem(STORAGE_KEYS.geminiContinuity) !== "false";
   return {
     provider,
     credentials,
@@ -58,7 +60,8 @@ export function createInitialState(): AppState {
     openrouterModel: sessionStorage.getItem(STORAGE_KEYS.openrouterModel) ?? "",
     openrouterModels: [],
     openrouterVoiceOptions: {},
-    geminiContinuity: sessionStorage.getItem(STORAGE_KEYS.geminiContinuity) !== "false",
+    geminiPreviousContext: readStoredBoolean(STORAGE_KEYS.geminiPreviousContext, legacyGeminiContinuity),
+    geminiFollowingContext: readStoredBoolean(STORAGE_KEYS.geminiFollowingContext, legacyGeminiContinuity),
     geminiNarratorDirection: sessionStorage.getItem(STORAGE_KEYS.geminiNarratorDirection) ?? "",
     minimaxModel: sessionStorage.getItem(STORAGE_KEYS.minimaxModel) ?? "speech-2.8-hd",
     minimaxVoices: readVoiceClones("minimaxVoiceClones"),
@@ -75,6 +78,11 @@ export function createInitialState(): AppState {
     segmentFailure: null,
     operationBusy: false
   };
+}
+
+function readStoredBoolean(key: string, fallback: boolean) {
+  const value = sessionStorage.getItem(key);
+  return value === null ? fallback : value !== "false";
 }
 
 export type AppAction =

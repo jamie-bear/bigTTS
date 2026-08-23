@@ -15,6 +15,13 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
   const textNormalizationAvailable = Boolean(providerConfig.supportsTextNormalization);
   const unavailableCapabilityCount = Number(!lowLatencyAvailable) + Number(!textNormalizationAvailable);
   const gemini31OpenRouter = state.provider === "openrouter" && isOpenRouterGemini31Model(state.openrouterModel);
+  const geminiContextMeta = state.geminiPreviousContext && state.geminiFollowingContext
+    ? "Both"
+    : state.geminiPreviousContext
+      ? "Previous"
+      : state.geminiFollowingContext
+        ? "Following"
+        : "Off";
   return <aside className="settings-panel" aria-label="Narration setup">
     <section className="card setup-card" aria-labelledby="provider-heading">
       <div className="compact-heading"><div className="heading-icon"><Icon name="key" /></div><div><p className="eyebrow">Connection</p><h2 id="provider-heading">Provider & access</h2></div></div>
@@ -44,9 +51,10 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
             {!providerConfig.supportsSpeed && <small>This provider does not accept a reading-speed setting.</small>}
           </>}
         />
-        {gemini31OpenRouter && <Disclosure className="gemini-continuity-panel" summary="Gemini continuity" meta={state.geminiContinuity ? "Enhanced" : "Standard"} bodyClassName="gemini-continuity-settings">
-          <Switch id="geminiContinuity" label="Enhanced continuity" checked={state.geminiContinuity} onChange={(event) => actions.setGeminiContinuity(event.target.checked)} />
-          <small>Uses compact silent context from neighboring segments to sustain the narrator's delivery.</small>
+        {gemini31OpenRouter && <Disclosure className="gemini-continuity-panel" summary="Gemini continuity" meta={geminiContextMeta} bodyClassName="gemini-continuity-settings">
+          <Switch id="geminiPreviousContext" label="Send previous segment context" checked={state.geminiPreviousContext} onChange={(event) => actions.setGeminiPreviousContext(event.target.checked)} />
+          <Switch id="geminiFollowingContext" label="Send following segment context" checked={state.geminiFollowingContext} onChange={(event) => actions.setGeminiFollowingContext(event.target.checked)} />
+          <small>Each enabled direction sends a compact, silent excerpt to help sustain delivery. Disable either direction if neighboring text causes Gemini to reject a segment.</small>
           <label htmlFor="geminiNarratorDirection"><span>Narrator direction <em>Optional</em></span><textarea className="gemini-direction" id="geminiNarratorDirection" maxLength={800} value={state.geminiNarratorDirection} onChange={(event) => actions.setGeminiNarratorDirection(event.target.value)} placeholder="For example: Warm, intimate literary narration with restrained emotion." /></label>
           <small>Keep this compatible with the selected voice. The same direction is repeated for every segment. {state.geminiNarratorDirection.length}/800</small>
         </Disclosure>}

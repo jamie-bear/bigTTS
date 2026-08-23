@@ -72,7 +72,8 @@ export interface NarrationOptions {
   optimizeStreamingLatency: boolean;
   textNormalization: boolean;
   model: string;
-  geminiContinuity: boolean;
+  geminiPreviousContext: boolean;
+  geminiFollowingContext: boolean;
   geminiNarratorDirection: string;
 }
 

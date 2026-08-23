@@ -1216,7 +1216,7 @@ export function createNarrationSession(client) {
 
     if (state.options.provider === "openrouter") {
       const retryOptions = state.automaticSegmentRetries > 0 && isOpenRouterGemini31Model(state.options.model)
-        ? { ...state.options, geminiContinuity: false }
+        ? { ...state.options, geminiPreviousContext: false, geminiFollowingContext: false }
         : state.options;
       await synthesizeBufferedSegment((signal) => synthesizeOpenRouterSpeech(segment, retryOptions, state.apiKey, signal));
       return;
@@ -1433,6 +1433,7 @@ function sanitizeOptions(raw) {
   const textNormalization = provider === "xai" && Boolean(raw.textNormalization);
   const model = provider === "openrouter" ? String(raw.model || "").trim() : provider === "minimax" ? sanitizeMiniMaxModel(raw.model) : "";
   const gemini31OpenRouter = provider === "openrouter" && isOpenRouterGemini31Model(model);
+  const legacyGeminiContinuity = raw.geminiContinuity !== false;
   const defaultSegmentChars = getDefaultSegmentChars(provider, model);
   const maxSegmentChars = getMaxSegmentChars(provider, model);
   const segmentChars = Math.round(clamp(Number(raw.segmentChars || defaultSegmentChars), MIN_SEGMENT_CHARS, maxSegmentChars));
@@ -1456,7 +1457,10 @@ function sanitizeOptions(raw) {
     maxSegmentBytes: provider === "google" ? GOOGLE_MAX_SEGMENT_BYTES : Number.POSITIVE_INFINITY,
     optimizeStreamingLatency,
     textNormalization,
-    geminiContinuity: gemini31OpenRouter && raw.geminiContinuity !== false,
+    geminiPreviousContext: gemini31OpenRouter
+      && (raw.geminiPreviousContext === undefined ? legacyGeminiContinuity : raw.geminiPreviousContext !== false),
+    geminiFollowingContext: gemini31OpenRouter
+      && (raw.geminiFollowingContext === undefined ? legacyGeminiContinuity : raw.geminiFollowingContext !== false),
     geminiNarratorDirection: gemini31OpenRouter ? sanitizeNarratorDirection(raw.geminiNarratorDirection) : ""
   };
 }
@@ -1639,7 +1643,8 @@ async function synthesizeOpenRouterSpeech(segment, options, apiKey, signal) {
       voice: options.voice,
       input: buildGemini31NarrationPrompt(segment, {
         speed: options.speed,
-        enhancedContinuity: options.geminiContinuity,
+        includePreviousContext: options.geminiPreviousContext,
+        includeFollowingContext: options.geminiFollowingContext,
         narratorDirection: options.geminiNarratorDirection
       }),
       signal
