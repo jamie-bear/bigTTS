@@ -12,6 +12,7 @@ export default defineConfig({
     trace: "retain-on-failure"
   },
   projects: [
+    { name: "firefox-playback", testMatch: "**/audioPlayback.spec.ts", use: { ...devices["Desktop Firefox"] } },
     { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
     { name: "mobile", use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } } }
   ],

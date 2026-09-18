@@ -8,6 +8,8 @@ interface AudioEngineEvents {
 export class AudioEngine {
   private mediaSource: MediaSource | null = null;
   private sourceBuffer: SourceBuffer | null = null;
+  private sourceOpenListener: (() => void) | null = null;
+  private endStreamTimer: number | undefined;
   private appendQueue: ArrayBuffer[] = [];
   private segmentAudioChunks: ArrayBuffer[][] = [];
   private activeSegmentIndex = -1;
@@ -20,6 +22,7 @@ export class AudioEngine {
   private pendingPlayableSnapshot: Blob | null = null;
   private sourceReplacementInProgress = false;
   private audioAvailableReported = false;
+  private streamPlaybackStarted = false;
   private started = false;
   private encoding: AudioEncoding = "mpeg";
   private sampleRate = 24_000;
@@ -28,12 +31,11 @@ export class AudioEngine {
   constructor(private readonly audio: HTMLAudioElement, private readonly events: AudioEngineEvents) {
     this.audio.addEventListener("ended", this.handlePlaybackEnded);
     this.audio.addEventListener("pause", this.handlePlaybackPaused);
+    this.audio.addEventListener("play", this.handlePlaybackStarted);
   }
 
   reset(initialEncoding: AudioEncoding = "mpeg") {
-    this.sourceBuffer?.removeEventListener("updateend", this.drainAppendQueue);
-    this.sourceBuffer = null;
-    this.mediaSource = null;
+    this.detachMediaSource();
     this.revokeUrls();
     this.segmentAudioChunks = [];
     this.activeSegmentIndex = -1;
@@ -46,26 +48,36 @@ export class AudioEngine {
     this.pendingPlayableSnapshot = null;
     this.sourceReplacementInProgress = false;
     this.audioAvailableReported = false;
+    this.streamPlaybackStarted = false;
     this.started = true;
 
-    if (initialEncoding === "pcm_s16le" || typeof MediaSource === "undefined") {
-      this.mediaSource = null;
-      this.audio.removeAttribute("src");
-      this.audio.load();
-      return;
-    }
+    try {
+      if (initialEncoding === "pcm_s16le" || typeof MediaSource === "undefined"
+        || typeof MediaSource.isTypeSupported !== "function" || !MediaSource.isTypeSupported("audio/mpeg")) {
+        this.useSegmentPlayback();
+        return;
+      }
 
-    this.mediaSource = new MediaSource();
-    this.objectUrl = URL.createObjectURL(this.mediaSource);
-    this.objectUrls.add(this.objectUrl);
-    this.audio.src = this.objectUrl;
-    this.mediaSource.addEventListener("sourceopen", () => {
-      if (!this.mediaSource || this.sourceBuffer) return;
-      this.sourceBuffer = this.mediaSource.addSourceBuffer("audio/mpeg");
-      this.sourceBuffer.mode = "sequence";
-      this.sourceBuffer.addEventListener("updateend", this.drainAppendQueue);
-      this.drainAppendQueue();
-    }, { once: true });
+      const mediaSource = new MediaSource();
+      this.mediaSource = mediaSource;
+      this.objectUrl = URL.createObjectURL(mediaSource);
+      this.objectUrls.add(this.objectUrl);
+      this.sourceOpenListener = () => {
+        if (this.mediaSource !== mediaSource || this.sourceBuffer) return;
+        try {
+          this.sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+          this.sourceBuffer.mode = "sequence";
+          this.sourceBuffer.addEventListener("updateend", this.drainAppendQueue);
+          this.drainAppendQueue();
+        } catch {
+          this.useSegmentPlayback();
+        }
+      };
+      mediaSource.addEventListener("sourceopen", this.sourceOpenListener, { once: true });
+      this.audio.src = this.objectUrl;
+    } catch {
+      this.useSegmentPlayback();
+    }
   }
 
   configure(encoding: AudioEncoding, sampleRate: number, channels: number) {
@@ -74,13 +86,7 @@ export class AudioEngine {
     this.sampleRate = sampleRate || 24_000;
     this.channels = channels || 1;
     if (encodingChanged && encoding === "pcm_s16le") {
-      this.sourceBuffer?.removeEventListener("updateend", this.drainAppendQueue);
-      if (this.objectUrl) this.revokeUrl(this.objectUrl);
-      this.objectUrl = "";
-      this.mediaSource = null;
-      this.sourceBuffer = null;
-      this.audio.removeAttribute("src");
-      this.audio.load();
+      this.useSegmentPlayback();
     }
   }
 
@@ -111,9 +117,10 @@ export class AudioEngine {
     if (this.encoding === "pcm_s16le" || !this.mediaSource) return;
     this.appendQueue.push(chunk);
     this.drainAppendQueue();
-    if (this.audio.paused && this.started) {
+    if (this.audio.paused && this.started && (!this.streamPlaybackStarted || this.audio.ended)) {
+      const mediaSource = this.mediaSource;
       void this.audio.play().catch(() => {
-        if (this.started) this.events.onStatus("Audio is buffering. Press play if your browser blocks autoplay.");
+        if (this.started && this.mediaSource === mediaSource) this.events.onStatus("Audio is buffering. Press play if your browser blocks autoplay.");
       });
     }
   }
@@ -168,11 +175,41 @@ export class AudioEngine {
 
   dispose() {
     this.started = false;
+    this.detachMediaSource();
     this.revokeUrls();
     this.audio.removeEventListener("ended", this.handlePlaybackEnded);
     this.audio.removeEventListener("pause", this.handlePlaybackPaused);
-    this.sourceBuffer?.removeEventListener("updateend", this.drainAppendQueue);
+    this.audio.removeEventListener("play", this.handlePlaybackStarted);
   }
+
+  private detachMediaSource() {
+    if (this.sourceOpenListener) this.mediaSource?.removeEventListener("sourceopen", this.sourceOpenListener);
+    this.sourceOpenListener = null;
+    this.sourceBuffer?.removeEventListener("updateend", this.drainAppendQueue);
+    window.clearTimeout(this.endStreamTimer);
+    this.endStreamTimer = undefined;
+    this.sourceBuffer = null;
+    this.mediaSource = null;
+    this.appendQueue = [];
+  }
+
+  private useSegmentPlayback() {
+    this.detachMediaSource();
+    const stitched = this.snapshotCompleted();
+    if (stitched) {
+      // Replace a failed stream immediately, even if play() left it buffering.
+      this.installPlayableSnapshot(stitched.blob, false);
+    } else {
+      if (this.objectUrl) this.revokeUrl(this.objectUrl);
+      this.objectUrl = "";
+      this.audio.removeAttribute("src");
+      this.audio.load();
+    }
+  }
+
+  private handlePlaybackStarted = () => {
+    if (this.mediaSource) this.streamPlaybackStarted = true;
+  };
 
   private handlePlaybackPaused = () => {
     if (!this.sourceReplacementInProgress && this.pendingPlayableSnapshot) this.flushPendingSnapshot(this.audio.ended);
@@ -220,7 +257,7 @@ export class AudioEngine {
     const wasPlaying = !this.audio.paused && !this.audio.ended;
     const wasAtGeneratedEnd = this.audio.ended;
     const firstPlayableSource = !this.playbackSourceInstalled;
-    const shouldResume = forceResume || wasPlaying || (this.started && (firstPlayableSource || wasAtGeneratedEnd));
+    const shouldResume = forceResume || wasPlaying || (this.started && ((firstPlayableSource && !this.streamPlaybackStarted) || wasAtGeneratedEnd));
     const previousPlaybackUrl = this.playbackObjectUrl;
     const previousMediaUrl = this.objectUrl;
     const token = ++this.replacementToken;
@@ -229,10 +266,7 @@ export class AudioEngine {
     this.playbackObjectUrl = url;
     this.playbackSourceInstalled = true;
 
-    this.sourceBuffer?.removeEventListener("updateend", this.drainAppendQueue);
-    this.sourceBuffer = null;
-    this.mediaSource = null;
-    this.appendQueue = [];
+    this.detachMediaSource();
     this.objectUrl = "";
     this.sourceReplacementInProgress = true;
     this.audio.src = url;
@@ -252,7 +286,7 @@ export class AudioEngine {
       }
       cleanupOldUrls();
       if (shouldResume) void this.audio.play().catch(() => {
-        if (this.started) this.events.onStatus("Audio is ready. Press play if your browser blocks autoplay.");
+        if (this.started && token === this.replacementToken) this.events.onStatus("Audio is ready. Press play if your browser blocks autoplay.");
       });
     };
     const handleError = () => {
@@ -267,10 +301,11 @@ export class AudioEngine {
 
   private endMediaStream() {
     if (this.encoding === "pcm_s16le") return;
+    const mediaSource = this.mediaSource;
     const tryEnd = () => {
-      if (!this.mediaSource || this.mediaSource.readyState !== "open") return;
+      if (!mediaSource || this.mediaSource !== mediaSource || mediaSource.readyState !== "open") return;
       if (this.sourceBuffer?.updating || this.appendQueue.length) {
-        window.setTimeout(tryEnd, 120);
+        this.endStreamTimer = window.setTimeout(tryEnd, 120);
         return;
       }
       try { this.mediaSource.endOfStream(); } catch { /* Stream may already be closed. */ }
