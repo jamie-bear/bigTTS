@@ -7,6 +7,7 @@ RUN npm ci --no-audit --no-fund
 
 COPY index.html tsconfig*.json vite.config.ts ./
 COPY src/client ./src/client
+COPY src/shared ./src/shared
 COPY src/logo.png ./src/logo.png
 RUN npm run build
 
@@ -20,6 +21,7 @@ ENV PORT=20204
 COPY package.json ./
 COPY src/server.js ./src/server.js
 COPY src/server ./src/server
+COPY src/shared ./src/shared
 COPY --from=build /app/dist ./dist
 
 EXPOSE 20204
