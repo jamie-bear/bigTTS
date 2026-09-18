@@ -70,14 +70,14 @@ const providers: ProviderConfig[] = [
     languages: xaiLanguages
   },
   {
-    id: "gemini", label: "Gemini Developer API — API key", storageKey: "geminiApiKey",
+    id: "gemini", label: "Google: Gemini 3.1 Flash TTS", storageKey: "geminiApiKey",
     accessDescription: "Gemini 3.1 Flash TTS (Preview) through the Developer API, using an AI Studio API key.",
     credentialLabel: "Gemini API key", credentialPlaceholder: "AI Studio API key", authMode: "api-key",
     defaultVoice: "Enceladus", defaultLanguage: "auto", defaultSegmentChars: 500, maxSegmentChars: 12000, supportsSpeed: true,
     voices: GEMINI_VOICES, languages: autoOnly
   },
   {
-    id: "google", label: "Google Cloud TTS — OAuth", storageKey: "googleTtsCredential",
+    id: "google", label: "Google: Gemini 3.1 Flash TTS", storageKey: "googleTtsCredential",
     accessDescription: "Gemini 3.1 Flash TTS (Preview) through Google Cloud Text-to-Speech, using Google OAuth.",
     credentialLabel: "", credentialPlaceholder: "", authMode: "google-oauth", defaultVoice: "Enceladus",
     defaultLanguage: "en-US", defaultSegmentChars: 500, maxSegmentChars: 4500, supportsSpeed: true, voices: GEMINI_VOICES,
@@ -93,7 +93,9 @@ const providers: ProviderConfig[] = [
   }
 ];
 
-export const PROVIDER_ORDER = providers.map(({ id }) => id);
+// Keep both transport IDs for saved sessions and server requests, but show Google once.
+export const PROVIDER_ORDER = providers.map(({ id }) => id).filter((id) => id !== "google");
+export const isGoogleProvider = (provider: ProviderId) => provider === "gemini" || provider === "google";
 export const PROVIDERS = Object.fromEntries(providers.map((provider) => [provider.id, provider])) as Record<ProviderId, ProviderConfig>;
 export const SEGMENT_OPTIONS = optionList([["500", "Very short"], ["1200", "Short"], ["2500", "Balanced"], ["4500", "Long"], ["8000", "Very long"], ["12000", "Maximum"]]);
 export const MINIMAX_MODELS = ["speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"];

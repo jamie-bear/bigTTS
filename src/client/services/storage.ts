@@ -3,12 +3,15 @@ import type { ProviderId, VoiceClone } from "../types/contracts";
 
 export const STORAGE_KEYS = {
   provider: "ttsProvider",
+  googleAccessMethod: "googleAccessMethod",
   openrouterModel: "openrouterModel",
   geminiContinuity: "openrouterGeminiContinuity",
   geminiPreviousContext: "openrouterGeminiPreviousContext",
   geminiFollowingContext: "openrouterGeminiFollowingContext",
   geminiNarratorDirection: "openrouterGeminiNarratorDirection",
   minimaxModel: "minimaxModel",
+  minimaxVoiceIdOverride: "minimaxVoiceIdOverride",
+  resembleVoiceIdOverride: "resembleVoiceIdOverride",
   minimaxVoiceClones: "minimaxVoiceClones"
 } as const;
 

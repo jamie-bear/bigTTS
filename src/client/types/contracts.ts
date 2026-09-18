@@ -1,4 +1,5 @@
 export type ProviderId = "gemini" | "xai" | "google" | "openrouter" | "resemble" | "minimax";
+export type GoogleAccessMethod = "api-key" | "oauth";
 
 export type NarrationPhase = "idle" | "connecting" | "generating" | "pausing" | "paused" | "recoverable" | "completed" | "stopped" | "error";
 export type AudioEncoding = "mpeg" | "pcm_s16le";

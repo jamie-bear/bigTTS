@@ -1,9 +1,11 @@
 import { OPENROUTER_GEMINI_31_TTS_MODEL, activeSegmentLimits, GEMINI_VOICES, isOpenRouterGemini31Model, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDER_ORDER, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../../src/client/config/providers";
 
 describe("provider registry", () => {
-  it("contains every supported provider, including the restored Gemini option", () => {
-    expect(PROVIDER_ORDER).toEqual(["openrouter", "minimax", "xai", "gemini", "google", "resemble"]);
+  it("lists Google once while retaining both access routes", () => {
+    expect(PROVIDER_ORDER).toEqual(["openrouter", "minimax", "xai", "gemini", "resemble"]);
     expect(Object.keys(PROVIDERS)).toHaveLength(6);
+    expect(PROVIDERS.gemini.label).toBe("Google: Gemini 3.1 Flash TTS");
+    expect(PROVIDERS.google.label).toBe(PROVIDERS.gemini.label);
   });
 
   it("applies the quality-first OpenRouter Gemini segment limits", () => {

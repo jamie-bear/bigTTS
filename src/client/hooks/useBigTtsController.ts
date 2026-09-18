@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { activeSegmentLimits, isOpenRouterGemini31Model, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
+import { activeSegmentLimits, isGoogleProvider, isOpenRouterGemini31Model, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
 import { api, fileToBase64 } from "../services/apiClient";
 import { AudioEngine } from "../services/audioEngine";
 import { NarrationSession } from "../services/narrationSession";
 import { STORAGE_KEYS, writeCredential, writeVoiceClones } from "../services/storage";
 import { appReducer, createInitialState } from "../state/appState";
-import type { NarrationOptions, ProviderId, SelectOption, ServerEvent, VoiceClone } from "../types/contracts";
+import type { GoogleAccessMethod, NarrationOptions, ProviderId, SelectOption, ServerEvent, VoiceClone } from "../types/contracts";
 
 const MAX_MINIMAX_SAMPLE_BYTES = 20 * 1024 * 1024;
 
@@ -180,10 +180,21 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
 
   const hasVoiceGenderMetadata = useMemo(() => voiceOptions.some((option) => Boolean(voiceGenderLabel(option.gender))), [voiceOptions]);
 
-  const selectProvider = useCallback((provider: ProviderId) => {
+  const selectAccessRoute = useCallback((provider: ProviderId) => {
     sessionStorage.setItem(STORAGE_KEYS.provider, provider);
+    // Persist even when leaving a legacy Google selection for another provider.
+    const method = isGoogleProvider(provider) ? (provider === "google" ? "oauth" : "api-key") : stateRef.current.googleAccessMethod;
+    sessionStorage.setItem(STORAGE_KEYS.googleAccessMethod, method);
     dispatch({ type: "provider", provider });
   }, []);
+
+  const selectProvider = useCallback((provider: ProviderId) => {
+    selectAccessRoute(isGoogleProvider(provider) ? (stateRef.current.googleAccessMethod === "oauth" ? "google" : "gemini") : provider);
+  }, [selectAccessRoute]);
+
+  const setGoogleAccessMethod = useCallback((method: GoogleAccessMethod) => {
+    selectAccessRoute(method === "oauth" ? "google" : "gemini");
+  }, [selectAccessRoute]);
 
   const setCredential = useCallback((value: string) => {
     const current = stateRef.current;
@@ -326,10 +337,13 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     if (!apiKey && !(current.provider === "google" && googleOAuth.connected)) return setStatus(current.provider === "google" ? "Connect Google before starting narration." : `Add your ${PROVIDERS[current.provider].credentialLabel}.`);
     if (!current.text.trim()) return setStatus("Paste text or load a .txt file.");
     if (current.provider === "openrouter" && !current.openrouterModel) return setStatus("Select an OpenRouter speech model before starting narration.");
-    if ((current.provider === "resemble" || current.provider === "minimax") && !current.voice) return setStatus(`Select a ${PROVIDERS[current.provider].label} voice before starting narration.`);
+    const voice = current.provider === "resemble" || current.provider === "minimax"
+      ? current.voiceIdOverrides[current.provider].trim() || current.voice
+      : current.voice;
+    if ((current.provider === "resemble" || current.provider === "minimax") && !voice.trim()) return setStatus("Select a custom voice or enter a voice ID before starting narration.");
     writeCredential(current.provider, apiKey, current.rememberCredential[current.provider]);
     const options: NarrationOptions = {
-      provider: current.provider, voice: current.voice, language: current.language, speed: current.speed,
+      provider: current.provider, voice, language: current.language, speed: current.speed,
       segmentChars: current.segmentChars, optimizeStreamingLatency: current.lowLatency, textNormalization: current.textNormalization,
       model: current.provider === "openrouter" ? current.openrouterModel : current.provider === "minimax" ? current.minimaxModel : "",
       geminiPreviousContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiPreviousContext,
@@ -428,9 +442,17 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     state, providerConfig, voiceOptions, hasVoiceGenderMetadata, stats,
     limits: activeSegmentLimits(state.provider, state.openrouterModel),
     actions: {
-      selectProvider, setCredential, setRememberCredential, selectOpenRouterModel, setMinimaxModel,
+      selectProvider, setGoogleAccessMethod, setCredential, setRememberCredential, selectOpenRouterModel, setMinimaxModel,
       setText: (text: string) => dispatch({ type: "patch", patch: { text } }),
       setVoice: (voice: string) => dispatch({ type: "patch", patch: { voice } }),
+      setVoiceIdOverride: (value: string) => {
+        const current = stateRef.current;
+        if (current.provider !== "resemble" && current.provider !== "minimax") return;
+        const key = STORAGE_KEYS[current.provider === "resemble" ? "resembleVoiceIdOverride" : "minimaxVoiceIdOverride"];
+        if (value.trim()) sessionStorage.setItem(key, value);
+        else sessionStorage.removeItem(key);
+        dispatch({ type: "patch", patch: { voiceIdOverrides: { ...current.voiceIdOverrides, [current.provider]: value } } });
+      },
       setLanguage: (language: string) => dispatch({ type: "patch", patch: { language } }),
       setSpeed: (speed: number) => dispatch({ type: "patch", patch: { speed } }),
       setSegmentChars: (value: number) => dispatch({ type: "segment", value }),

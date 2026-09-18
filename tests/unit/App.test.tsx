@@ -16,8 +16,8 @@ describe("bigTTS application shell", () => {
     render(<App />);
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(screen.getByRole("link", { name: "bigTTS home" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Gemini Developer API — API key" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Google Cloud TTS — OAuth" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: "Google: Gemini 3.1 Flash TTS" })).toHaveLength(1);
+    expect(screen.getByLabelText("Provider").querySelectorAll("option")).toHaveLength(5);
     expect(screen.getByRole("button", { name: "Start narration" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Pause generation" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
@@ -31,11 +31,55 @@ describe("bigTTS application shell", () => {
     expect(screen.getByRole("option", { name: "Enceladus — Breathy — Male" })).toBeInTheDocument();
     expect(screen.queryByText(/♀|♂|⚥/)).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "google" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gemini" } });
+    fireEvent.change(screen.getByLabelText("Access method"), { target: { value: "oauth" } });
     expect(screen.getByText(/Google Cloud Text-to-Speech, using Google OAuth/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "xai" } });
     expect(screen.getByRole("option", { name: "Sal — Neutral" })).toBeInTheDocument();
+  });
+
+  it("preserves the voice and API key while switching Google access methods and remembers the preference", async () => {
+    const app = render(<App />);
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gemini" } });
+    fireEvent.change(screen.getByLabelText("Gemini API key"), { target: { value: "saved-gemini-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Keep for session" }));
+    fireEvent.change(screen.getByLabelText("Voice"), { target: { value: "Kore" } });
+    fireEvent.change(screen.getByLabelText("Segment size"), { target: { value: "8000" } });
+    fireEvent.change(screen.getByLabelText("Access method"), { target: { value: "oauth" } });
+    expect(screen.getByLabelText("Provider")).toHaveValue("gemini");
+    expect(screen.getByLabelText("Voice")).toHaveValue("Kore");
+    expect(screen.getByLabelText("Language")).toHaveValue("en-US");
+    expect(screen.getByLabelText("Segment size")).toHaveValue("500");
+    expect(screen.getByRole("option", { name: "Very long" })).toBeDisabled();
+    expect(screen.queryByLabelText("Gemini API key")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect Google" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Access method"), { target: { value: "api-key" } });
+    expect(screen.getByLabelText("Language")).toHaveValue("auto");
+    expect(screen.getByLabelText("Segment size")).toHaveValue("8000");
+    expect(screen.getByRole("checkbox", { name: /Gemini API key kept/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Gemini API key kept/ }));
+    expect(screen.getByLabelText("Gemini API key")).toHaveValue("saved-gemini-key");
+    fireEvent.change(screen.getByLabelText("Access method"), { target: { value: "oauth" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "xai" } });
+    app.unmount();
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gemini" } });
+    expect(screen.getByLabelText("Access method")).toHaveValue("oauth");
+    expect(screen.getByRole("button", { name: "Connect Google" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Google OAuth is not configured")).toBeInTheDocument());
+  });
+
+  it.each([ ["gemini", "api-key"], ["google", "oauth"] ])("restores the legacy %s selection in the combined Google provider", async (provider, method) => {
+    sessionStorage.setItem("ttsProvider", provider);
+    sessionStorage.setItem("geminiApiKey", "legacy-key");
+    render(<App />);
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(screen.getByLabelText("Provider")).toHaveValue("gemini");
+    expect(screen.getByLabelText("Access method")).toHaveValue(method);
+    if (method === "api-key") expect(screen.getByRole("checkbox", { name: /Gemini API key kept/ })).toBeChecked();
+    else expect(screen.getByRole("button", { name: "Connect Google" })).toBeInTheDocument();
   });
 
   it("loads and clears the sample while updating text statistics", async () => {
@@ -79,7 +123,8 @@ describe("bigTTS application shell", () => {
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "xai" } });
     expect(screen.getByLabelText("Optimize first audio chunk")).toBeInTheDocument();
     expect(screen.getByLabelText("Normalize numbers and abbreviations")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "google" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gemini" } });
+    fireEvent.change(screen.getByLabelText("Access method"), { target: { value: "oauth" } });
     expect(screen.getByLabelText("Optimize first audio chunk")).toBeDisabled();
     expect(screen.getByLabelText("Normalize numbers and abbreviations")).toBeDisabled();
     const unavailableOptions = screen.getByText("Unavailable options").closest("details");
@@ -102,7 +147,8 @@ describe("bigTTS application shell", () => {
     });
     render(<App />);
     await waitFor(() => expect(statusRequests).toBe(1));
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "google" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gemini" } });
+    fireEvent.change(screen.getByLabelText("Access method"), { target: { value: "oauth" } });
 
     act(() => window.dispatchEvent(new MessageEvent("message", {
       origin: window.location.origin,
@@ -121,7 +167,8 @@ describe("bigTTS application shell", () => {
     });
     render(<App />);
     await waitFor(() => expect(fetch).toHaveBeenCalled());
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "google" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gemini" } });
+    fireEvent.change(screen.getByLabelText("Access method"), { target: { value: "oauth" } });
 
     act(() => window.dispatchEvent(new MessageEvent("message", {
       origin: window.location.origin,

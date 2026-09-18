@@ -1,13 +1,15 @@
-import { PROVIDERS, activeSegmentLimits } from "../config/providers";
+import { PROVIDERS, activeSegmentLimits, isGoogleProvider } from "../config/providers";
 import { readCredentials, readProvider, readVoiceClones, STORAGE_KEYS } from "../services/storage";
-import type { GoogleOAuthStatus, NarrationPhase, OpenRouterModel, ProviderBalance, ProviderId, SegmentFailure, SelectOption, StitchedAudio, VoiceClone } from "../types/contracts";
+import type { GoogleAccessMethod, GoogleOAuthStatus, NarrationPhase, OpenRouterModel, ProviderBalance, ProviderId, SegmentFailure, SelectOption, StitchedAudio, VoiceClone } from "../types/contracts";
 
 export interface AppState {
   provider: ProviderId;
+  googleAccessMethod: GoogleAccessMethod;
   credentials: Record<ProviderId, string>;
   rememberCredential: Record<ProviderId, boolean>;
   text: string;
   voice: string;
+  voiceIdOverrides: Record<"resemble" | "minimax", string>;
   language: string;
   speed: number;
   segmentChars: number;
@@ -47,10 +49,15 @@ export function createInitialState(): AppState {
   const legacyGeminiContinuity = sessionStorage.getItem(STORAGE_KEYS.geminiContinuity) !== "false";
   return {
     provider,
+    googleAccessMethod: provider === "google" ? "oauth" : provider === "gemini" ? "api-key" : sessionStorage.getItem(STORAGE_KEYS.googleAccessMethod) === "oauth" ? "oauth" : "api-key",
     credentials,
     rememberCredential,
     text: "",
     voice: config.defaultVoice,
+    voiceIdOverrides: {
+      resemble: sessionStorage.getItem(STORAGE_KEYS.resembleVoiceIdOverride) ?? "",
+      minimax: sessionStorage.getItem(STORAGE_KEYS.minimaxVoiceIdOverride) ?? ""
+    },
     language: config.defaultLanguage,
     speed: 1,
     segmentChars: config.defaultSegmentChars,
@@ -110,7 +117,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         provider: action.provider,
-        voice: config.defaultVoice,
+        googleAccessMethod: action.provider === "google" ? "oauth" : action.provider === "gemini" ? "api-key" : state.googleAccessMethod,
+        voice: isGoogleProvider(state.provider) && isGoogleProvider(action.provider) ? state.voice : config.defaultVoice,
         language: config.defaultLanguage,
         segmentChars,
         providerBalance: null,

@@ -32,6 +32,14 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
       <div className="compact-heading"><div className="heading-icon"><Icon name="settings" /></div><div><p className="eyebrow">Configuration</p><h2 id="settings-heading">Voice & synthesis</h2></div></div>
       <form className="settings" aria-label="Narration settings" onSubmit={(event) => event.preventDefault()}>
         <SelectField id="voice" label="Voice" options={voiceOptions} value={state.voice} onChange={(event) => actions.setVoice(event.target.value)} helper={hasVoiceGenderMetadata ? "Gender is shown as text only where provider metadata is available." : undefined} />
+        {(state.provider === "resemble" || state.provider === "minimax") && <div className="field">
+          <label className="field-label" htmlFor="voiceIdOverride">Voice ID <em>Optional</em></label>
+          <input id="voiceIdOverride" type="text" autoComplete="off" autoCapitalize="none" spellCheck={false}
+            placeholder={state.provider === "resemble" ? "e.g. 819fcc57" : "Enter a MiniMax voice ID"}
+            value={state.voiceIdOverrides[state.provider]} onChange={(event) => actions.setVoiceIdOverride(event.target.value)}
+            aria-describedby="voiceIdOverrideHelp" />
+          <small id="voiceIdOverrideHelp" className="field-help">Overrides the selected voice. Clear this field to use the dropdown.</small>
+        </div>}
         {state.provider === "minimax" && <MiniMaxVoiceManager controller={controller} />}
         <div className="field-grid"><SelectField id="language" label="Language" options={providerConfig.languages} value={state.language} onChange={(event) => actions.setLanguage(event.target.value)} /><SelectField id="segmentChars" label={gemini31OpenRouter ? "Segment target" : "Segment size"} options={SEGMENT_OPTIONS.map((option) => ({ ...option, disabled: Number(option.value) > limits.maxSegmentChars }))} value={state.segmentChars} onChange={(event) => actions.setSegmentChars(Number(event.target.value))} helper={gemini31OpenRouter ? `${state.segmentChars.toLocaleString()}-character target` : `${state.segmentChars.toLocaleString()} characters per request`} /></div>
         <Slider
@@ -171,12 +179,12 @@ function MiniMaxVoiceManager({ controller }: { controller: Controller }) {
     </div>
 
     {selected ? <div className="selected-voice">
-      <div className="selected-voice-copy"><span>Selected voice</span><strong>{selected.name}</strong><code>{selected.id}</code>{selected.model && <small>{selected.model}</small>}</div>
+      <div className="selected-voice-copy"><span>Selected library voice</span><strong>{selected.name}</strong><code>{selected.id}</code>{selected.model && <small>{selected.model}</small>}</div>
       <div className="voice-action-row">
         <Button type="button" disabled={state.operationBusy} onClick={() => { setName(selected.name); setMode("rename"); }}><Icon name="settings" />Rename</Button>
         <Button type="button" className="danger-button" disabled={state.operationBusy} onClick={() => setMode("delete")}><Icon name="trash" />Delete</Button>
       </div>
-    </div> : <p className="voice-library-empty">No custom voices found. Add one to start narrating with MiniMax.</p>}
+    </div> : <p className="voice-library-empty">No custom voice selected. Choose or add a library voice, or enter a voice ID above to narrate with MiniMax.</p>}
 
     {mode === "rename" && selected && <div className="voice-inline-editor">
       <label htmlFor={`${formId}-display-name`}>Display name <span>Saved in this browser</span></label>

@@ -123,13 +123,17 @@ OpenRouter Gemini 3.1 defaults to a 500-character semantic target (the **Very sh
 
 Gemini 3.1 pace is expressed in the director prompt because OpenRouter's generic `speed` field is not supported by every TTS provider. The model returns 24 kHz, 16-bit mono PCM. Successful responses are validated without filtering or normalizing the audio; transient preview-model failures are retried up to twice, with both neighboring-context directions removed on retries. The generation ID is retained in narration diagnostics. Waveform crossfading and a Web Audio playback scheduler remain intentionally out of scope, so this release improves tonal and prosodic continuity rather than mechanically editing boundaries.
 
-Gemini API is the simplest Google option. It uses the Gemini Developer API endpoint `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent` with an AI Studio API key. Gemini TTS returns raw 24 kHz PCM audio, so the browser wraps it as WAV for playback and download.
+Select **Google: Gemini 3.1 Flash TTS**, then choose **API key** or **OAuth** under **Access method**. The app remembers the method for the browser session and keeps your selected voice when switching methods. Existing saved Google/Gemini selections and API keys remain compatible.
+
+The **API key** method uses the Gemini Developer API endpoint `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent` with an AI Studio API key. Gemini TTS returns raw 24 kHz PCM audio, so the browser wraps it as WAV for playback and download.
 
 For xAI, this app uses the streaming TTS endpoint, `wss://api.x.ai/v1/tts`. The official docs state that each `text.delta` message is capped at 15,000 characters, while the bidirectional WebSocket endpoint supports long total text through multiple deltas and multi-utterance sessions.
 
 For Google Cloud TTS, this app uses Cloud Text-to-Speech `text:synthesize` at `https://texttospeech.googleapis.com/v1/text:synthesize` with `voice.modelName` set to `gemini-3.1-flash-tts-preview`. Google returns one base64 LINEAR16 payload per segment; the backend removes the WAV header and forwards 24 kHz PCM audio so the browser can play and download a continuous WAV. Cloud Gemini-TTS requires principal-backed authentication plus permission to call the model endpoint; use the local OAuth connection above before starting narration.
 
 Resemble.ai uses `https://app.resemble.ai/api/v2/voices` to list ready custom voices after a Resemble.ai API key is entered, then calls `https://f.cluster.resemble.ai/synthesize` with the selected `voice_uuid`, 22.05 kHz sample rate, and `PCM_16` WAV precision. Resemble.ai returns base64 WAV audio; the backend forwards the decoded 16-bit PCM payload so the browser can play and download a continuous WAV.
+
+For Resemble.ai and MiniMax, choose a custom voice from the dropdown or enter an optional **Voice ID** (for example, `819fcc57` for Resemble.ai). A nonempty ID overrides the dropdown, even if no custom voices can be loaded. Clear the field to use the dropdown again. Each provider's entered ID is remembered separately for the browser session, including page reloads. IDs are trimmed before narration and must be usable with your provider API key. MiniMax library rename/delete actions always apply to the selected library voice, not the entered ID.
 
 MiniMax voice cloning accepts an optional transcript of the source recording. When supplied, the backend forwards it as `text_validation` so MiniMax can reject a sample whose recognized speech does not match. bigTTS does not request an automatic clone preview: MiniMax bills preview text as TTS usage, and the app does not expose a separate preview player.
 

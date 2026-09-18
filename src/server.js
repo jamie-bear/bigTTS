@@ -1441,10 +1441,10 @@ function sanitizeOptions(raw) {
     throw new Error("Select an OpenRouter speech model before starting narration.");
   }
   if (provider === "resemble" && !voice) {
-    throw new Error("Select a Resemble.ai custom voice before starting narration.");
+    throw new Error("Select a custom voice or enter a voice ID before starting narration with Resemble.ai.");
   }
   if (provider === "minimax" && !voice) {
-    throw new Error("Select a MiniMax custom voice before starting narration.");
+    throw new Error("Select a custom voice or enter a voice ID before starting narration with MiniMax.");
   }
 
   return {

@@ -1,6 +1,7 @@
-import { MINIMAX_MODELS, PROVIDER_ORDER, PROVIDERS } from "../config/providers";
+import { isGoogleProvider, MINIMAX_MODELS, PROVIDER_ORDER, PROVIDERS } from "../config/providers";
 import type { useBigTtsController } from "../hooks/useBigTtsController";
-import { Button, Checkbox, FieldPanel } from "./ui/Controls";
+import type { GoogleAccessMethod } from "../types/contracts";
+import { Button, Checkbox, FieldPanel, SelectField } from "./ui/Controls";
 import { Icon } from "./ui/Icon";
 
 type Controller = ReturnType<typeof useBigTtsController>;
@@ -10,11 +11,15 @@ export function ProviderSetup({ controller }: { controller: Controller }) {
   const usesKey = providerConfig.authMode === "api-key";
   const credential = state.credentials[state.provider];
   const remembered = state.rememberCredential[state.provider];
+  const isGoogle = isGoogleProvider(state.provider);
   return <div className="provider-setup">
     <div className="field"><label className="field-label" htmlFor="provider">Provider</label>
-      <select id="provider" value={state.provider} onChange={(event) => actions.selectProvider(event.target.value as keyof typeof PROVIDERS)}>
+      <select id="provider" value={isGoogle ? "gemini" : state.provider} onChange={(event) => actions.selectProvider(event.target.value as keyof typeof PROVIDERS)}>
         {PROVIDER_ORDER.map((id) => <option key={id} value={id}>{PROVIDERS[id].label}</option>)}
-      </select>{providerConfig.accessDescription && <small className="field-help">{providerConfig.accessDescription}</small>}</div>
+      </select></div>
+    {isGoogle && <SelectField id="googleAccessMethod" label="Access method" value={state.googleAccessMethod}
+      options={[{ value: "api-key", label: "API key" }, { value: "oauth", label: "OAuth" }]}
+      onChange={(event) => actions.setGoogleAccessMethod(event.target.value as GoogleAccessMethod)} helper={providerConfig.accessDescription} />}
       {usesKey && <div className="credential-block">
         {remembered ? <div className="credential-saved">
           <Checkbox id="rememberKey" label={`${providerConfig.credentialLabel} kept for this browser session`} checked onChange={(event) => actions.setRememberCredential(event.target.checked)} />

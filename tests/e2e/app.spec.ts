@@ -38,6 +38,10 @@ test.beforeEach(async ({ page, context }) => {
       }
       if (command.type === "start") {
         narrationText = command.text;
+        if (command.text === "inspect-google-access") {
+          socket.send(JSON.stringify({ type: "status", message: `route=${command.options.provider}; key=${command.apiKey || "none"}` }));
+          return;
+        }
         if (command.text === "inspect-gemini-options") {
           socket.send(JSON.stringify({ type: "status", message: `previous=${command.options.geminiPreviousContext}; following=${command.options.geminiFollowingContext}; direction=${command.options.geminiNarratorDirection}` }));
           return;
@@ -124,7 +128,8 @@ test("pins a dark theme from the header toggle", async ({ page }) => {
 
 for (const provider of ["openrouter", "minimax", "xai", "gemini", "google", "resemble"] as const) {
   test(`${provider} retains its provider-specific controls`, async ({ page }) => {
-    await page.getByLabel("Provider", { exact: true }).selectOption(provider);
+    await page.getByLabel("Provider", { exact: true }).selectOption(provider === "google" ? "gemini" : provider);
+    if (provider === "google") await page.getByLabel("Access method").selectOption("oauth");
     if (provider !== "google") await page.locator("#apiKey").fill("test-key");
     if (provider === "openrouter") await expect(page.getByLabel("OpenRouter model")).toBeEnabled();
     if (provider === "minimax") await expect(page.getByLabel("MiniMax speech model")).toBeVisible();
@@ -142,6 +147,27 @@ test("mocked WebSocket events drive narration progress and completion", async ({
   await expect(page.getByText("1 / 1 segments")).toBeVisible();
   await expect(page.getByText("Narration fully generated. Continuous MP3 ready.")).toBeVisible();
   await expect(page.getByRole("button", { name: /Download MP3/ })).toBeEnabled();
+});
+
+test("switches Google access methods and sends narration through the selected route", async ({ page }) => {
+  const provider = page.getByLabel("Provider", { exact: true });
+  await expect(provider.locator("option")).toHaveCount(5);
+  await provider.selectOption({ label: "Google: Gemini 3.1 Flash TTS" });
+  await page.getByLabel("Gemini API key").fill("test-google-key");
+  await page.getByLabel("Voice", { exact: true }).selectOption("Kore");
+  await page.getByLabel("Book or chapter text").fill("inspect-google-access");
+  await page.getByRole("button", { name: "Start narration" }).click();
+  await expect(page.getByText("route=gemini; key=test-google-key")).toBeVisible();
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await page.getByLabel("Access method").selectOption("oauth");
+  await expect(page.getByLabel("Voice", { exact: true })).toHaveValue("Kore");
+  await expect(page.getByLabel("Gemini API key")).toHaveCount(0);
+  await page.getByRole("button", { name: "Start narration" }).click();
+  await expect(page.getByText("route=google; key=none")).toBeVisible();
+  await page.reload();
+  await expect(provider).toHaveValue("gemini");
+  await expect(page.getByLabel("Access method")).toHaveValue("oauth");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test("refreshes the selected provider balance after a segment completes", async ({ page }) => {
