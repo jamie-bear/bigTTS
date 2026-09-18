@@ -1748,8 +1748,15 @@ export async function synthesizeResembleSpeech(text, options, apiKey, signal) {
       throw providerError("Resemble.ai", response, body, `${response.status} ${response.statusText}`);
     }
 
-    try { return decodeResembleWav(body?.audio_content, RESEMBLE_SAMPLE_RATE); }
-    catch (error) { throw providerError("Resemble.ai", response, { trace_id: body?.trace_id }, error.message); }
+    const diagnostics = { trace_id: body?.trace_id || response.headers.get("x-request-id") };
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw providerError("Resemble.ai", response, diagnostics, "Synthesis response was not a JSON object containing audio_content.");
+    }
+    try { return decodeResembleWav(body.audio_content, RESEMBLE_SAMPLE_RATE); }
+    catch (error) {
+      const issues = Array.isArray(body.issues) ? body.issues.filter((issue) => typeof issue === "string").slice(0, 5).join("; ").slice(0, 500) : "";
+      throw providerError("Resemble.ai", response, diagnostics, `${error.message}${issues ? ` Provider issues: ${issues}` : ""}`);
+    }
   }, signal);
 }
 

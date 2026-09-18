@@ -111,6 +111,61 @@ describe("cloning contracts", () => {
 });
 
 describe("audio and provider responses", () => {
+  it.each([1, 2, 3])("accepts wrapped and unpadded Resemble base64 for %i samples", (count) => {
+    const bytes = wav(Array.from({ length: count }, (_, index) => index + 1));
+    const encoded = bytes.toString("base64");
+    const wrapped = ` \t${encoded.match(/.{1,20}/g).join("\r\n")}\n`;
+    for (const value of [encoded, wrapped, encoded.replace(/=+$/, ""), wrapped.replace(/=/g, ""), bytes.toString("base64url")]) {
+      expect(decodeResembleWav(value)).toEqual(bytes.subarray(44));
+    }
+  });
+
+  it("rejects corrupt base64 and still validates decoded WAV format", () => {
+    const encoded = wav().toString("base64");
+    for (const value of ["A", "A===", "AQ=", "AQ==junk", "AA=A", "!!!!", encoded + "=", encoded.slice(0, 8) + "!" + encoded.slice(8), "data:audio/wav;base64," + encoded]) {
+      expect(() => decodeResembleWav(value)).toThrow("invalid base64");
+    }
+    const wrongRate = wav([1, 2, 3], 24000).toString("base64").replace(/=+$/, "") + "\n";
+    expect(() => decodeResembleWav(wrongRate)).toThrow("invalid WAV");
+    expect(() => decodeResembleWav(Buffer.from("not a WAV").toString("base64") + "\n")).toThrow("invalid WAV");
+  });
+
+  it("distinguishes missing Resemble audio from malformed base64", () => {
+    for (const value of [undefined, null, "", " \r\n"]) expect(() => decodeResembleWav(value)).toThrow("missing audio_content");
+    for (const value of [12, {}, []]) expect(() => decodeResembleWav(value)).toThrow("must be a base64 string");
+  });
+
+  it("decodes line-wrapped synthesis responses through the Resemble request path", async () => {
+    const encoded = wav().toString("base64");
+    vi.stubGlobal("fetch", vi.fn(async () => json({ success: true, audio_content: encoded.match(/.{1,20}/g).join("\n") + "\n" })));
+    await expect(synthesizeResembleSpeech("Hello", { voice: "voice", resemble: {} }, "key")).resolves.toEqual(wav().subarray(44));
+  });
+
+  it("handles a segment-sized wrapped Resemble WAV without regex stack limits", () => {
+    const bytes = Buffer.alloc(44 + 2 * 1024 * 1024);
+    wav([]).copy(bytes);
+    bytes.writeUInt32LE(bytes.length - 8, 4);
+    bytes.writeUInt32LE(bytes.length - 44, 40);
+    const encoded = bytes.toString("base64").match(/.{1,76}/g).join("\n") + "\n";
+    expect(decodeResembleWav(encoded).equals(bytes.subarray(44))).toBe(true);
+  });
+
+  it("reports missing audio and provider issues without losing the request ID", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({ success: true, issues: ["No audio generated"], trace_id: "resemble-trace" })));
+    await expect(synthesizeResembleSpeech("Hello", { voice: "voice", resemble: {} }, "key")).rejects.toMatchObject({
+      message: expect.stringContaining("missing audio_content. Provider issues: No audio generated"),
+      details: { providerName: "Resemble.ai", status: 200, requestId: "resemble-trace" }
+    });
+  });
+
+  it("identifies malformed JSON responses and retains the response request ID", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>Gateway problem</html>", { headers: { "x-request-id": "gateway-trace" } })));
+    await expect(synthesizeResembleSpeech("Hello", { voice: "voice", resemble: {} }, "key")).rejects.toMatchObject({
+      message: expect.stringContaining("not a JSON object containing audio_content"),
+      details: { requestId: "gateway-trace" }
+    });
+  });
+
   it("requires exact hex and mono PCM16 WAV rather than guessing audio formats", () => {
     expect(decodeMiniMaxAudio("ff001a")).toEqual(Buffer.from([255, 0, 26]));
     for (const audio of ["AQIDBA==", "abc", "", null]) expect(() => decodeMiniMaxAudio(audio)).toThrow();

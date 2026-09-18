@@ -88,8 +88,17 @@ export function decodeMiniMaxAudio(value) {
 }
 
 export function decodeResembleWav(value, sampleRate = 22050) {
-  if (typeof value !== "string" || !value || value.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error("Resemble returned invalid base64 audio.");
-  const audio = Buffer.from(value, "base64");
+  if (value === undefined || value === null) throw new Error("Resemble response is missing audio_content.");
+  if (typeof value !== "string") throw new Error("Resemble audio_content must be a base64 string.");
+  // MIME-style line wrapping and omitted terminal padding do not change the
+  // audio. Normalize those forms, but don't let Buffer silently ignore junk.
+  const encoded = value.replace(/[\t\n\r ]/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  if (!encoded) throw new Error("Resemble response is missing audio_content.");
+  const invalidBase64 = () => new Error("Resemble returned invalid base64 audio (invalid characters or padding).");
+  const unpadded = encoded.replace(/={1,2}$/, "");
+  if (/[^A-Za-z0-9+/]/.test(unpadded) || unpadded.length % 4 === 1
+    || (unpadded.length !== encoded.length && encoded.length % 4 !== 0)) throw invalidBase64();
+  const audio = Buffer.from(encoded, "base64");
   const invalid = () => new Error("Resemble returned invalid WAV audio; expected mono PCM16 at 22050 Hz.");
   if (audio.length < 44 || audio.toString("ascii", 0, 4) !== "RIFF" || audio.toString("ascii", 8, 12) !== "WAVE" || audio.readUInt32LE(4) + 8 !== audio.length) throw invalid();
   let formatValid = false;
