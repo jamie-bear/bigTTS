@@ -29,6 +29,7 @@ export interface AppState {
   geminiPreviousContext: boolean;
   geminiFollowingContext: boolean;
   geminiNarratorDirection: string;
+  autoSmartRetry: boolean;
   minimaxModel: string;
   minimaxVoices: VoiceClone[];
   resembleVoices: VoiceClone[];
@@ -86,6 +87,7 @@ export function createInitialState(): AppState {
     geminiPreviousContext: readStoredBoolean(STORAGE_KEYS.geminiPreviousContext, legacyGeminiContinuity),
     geminiFollowingContext: readStoredBoolean(STORAGE_KEYS.geminiFollowingContext, legacyGeminiContinuity),
     geminiNarratorDirection: sessionStorage.getItem(STORAGE_KEYS.geminiNarratorDirection) ?? "",
+    autoSmartRetry: sessionStorage.getItem(STORAGE_KEYS.autoSmartRetry) === "true",
     minimaxModel,
     minimaxVoices,
     resembleVoices: [],

@@ -83,6 +83,7 @@ export interface NarrationOptions {
   geminiPreviousContext: boolean;
   geminiFollowingContext: boolean;
   geminiNarratorDirection: string;
+  autoSmartRetry?: boolean;
 }
 
 export interface StartNarrationCommand {
@@ -129,7 +130,7 @@ export type ServerEvent =
   | { type: "status"; message: string }
   | { type: "segment"; index: number; totalSegments: number; boundaryBefore?: GeminiBoundary; boundaryAfter?: GeminiBoundary }
   | { type: "segmentDone"; index: number; totalSegments: number; generationId?: string; attempts?: number; omissions?: TextOmission[] }
-  | { type: "smartRetryProgress"; index: number; attempts: number; attemptLimit: number; resolvedPieces: number; skippedPieces: number }
+  | { type: "smartRetryProgress"; index: number; attempts: number; attemptLimit: number; resolvedPieces: number; skippedPieces: number; automatic?: boolean; totalAttempts?: number }
   | { type: "pausePending"; currentSegment: number; totalSegments: number }
   | { type: "paused"; completedSegments: number; totalSegments: number }
   | { type: "resumed"; nextSegment: number; totalSegments: number }

@@ -97,6 +97,7 @@ export const SEGMENT_OPTIONS = optionList([["500", "Very short"], ["1200", "Shor
 export const isProviderId = (value: string | null): value is ProviderId => Boolean(value && value in PROVIDERS);
 export const isOpenRouterPcmModel = (modelId: string) => /(^|[/:-])(?:google|gemini)(?:[/:-]|$)/i.test(modelId);
 export const isOpenRouterGemini31Model = (modelId: string) => modelId.trim().toLowerCase() === OPENROUTER_GEMINI_31_TTS_MODEL;
+export const isOpenRouterGeminiModel = (modelId: string) => /(^|[/:-])gemini(?:[/:-]|$)/i.test(modelId);
 
 export function sortVoiceOptions(options: SelectOption[]) {
   return [...options].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base", numeric: true }));

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { activeSegmentLimits, isGoogleProvider, isOpenRouterGemini31Model, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
+import { activeSegmentLimits, isGoogleProvider, isOpenRouterGemini31Model, isOpenRouterGeminiModel, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
 import { api, fileToBase64 } from "../services/apiClient";
 import { AudioEngine } from "../services/audioEngine";
 import { NarrationSession } from "../services/narrationSession";
@@ -310,7 +310,8 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       dispatch({ type: "patch", patch: { phase: "generating", totalSegments: event.totalSegments, status: `Generation resumed. Preparing segment ${event.nextSegment}...` } });
     } else if (event.type === "smartRetryProgress") {
       const pausing = stateRef.current.phase === "pausing";
-      setStatus(`Smart retry: segment ${event.index} · attempt ${event.attempts}/${event.attemptLimit} · ${event.resolvedPieces} pieces recovered · ${event.skippedPieces} skipped${pausing ? " · will pause after this segment" : ""}.`);
+      const attempt = event.automatic ? event.totalAttempts ?? event.attempts : `${event.attempts}/${event.attemptLimit}`;
+      setStatus(`${event.automatic ? "Auto smart retry" : "Smart retry"}: segment ${event.index} · attempt ${attempt} · ${event.resolvedPieces} pieces recovered · ${event.skippedPieces} skipped${pausing ? " · will pause after this segment" : ""}.`);
     } else if (event.type === "segmentFailed") {
       const segmentFailure = { index: event.index, totalSegments: event.totalSegments, message: event.message, details: event.details,
         smartRetryAvailable: event.smartRetryAvailable, smartRetryResumable: event.smartRetryResumable };
@@ -383,7 +384,8 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       model: current.provider === "openrouter" ? current.openrouterModel : current.provider === "minimax" ? current.minimaxModel : "",
       geminiPreviousContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiPreviousContext,
       geminiFollowingContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiFollowingContext,
-      geminiNarratorDirection: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) ? current.geminiNarratorDirection : ""
+      geminiNarratorDirection: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) ? current.geminiNarratorDirection : "",
+      autoSmartRetry: current.provider === "openrouter" && isOpenRouterGeminiModel(current.openrouterModel) && current.autoSmartRetry
     };
     const initialPcm = current.provider === "gemini" || current.provider === "google" || current.provider === "resemble" || (current.provider === "openrouter" && isOpenRouterPcmModel(current.openrouterModel));
     sessionRef.current?.dispose();
@@ -519,6 +521,10 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       setGeminiPreviousContext: (geminiPreviousContext: boolean) => {
         sessionStorage.setItem(STORAGE_KEYS.geminiPreviousContext, String(geminiPreviousContext));
         dispatch({ type: "patch", patch: { geminiPreviousContext } });
+      },
+      setAutoSmartRetry: (autoSmartRetry: boolean) => {
+        sessionStorage.setItem(STORAGE_KEYS.autoSmartRetry, String(autoSmartRetry));
+        dispatch({ type: "patch", patch: { autoSmartRetry } });
       },
       setGeminiFollowingContext: (geminiFollowingContext: boolean) => {
         sessionStorage.setItem(STORAGE_KEYS.geminiFollowingContext, String(geminiFollowingContext));

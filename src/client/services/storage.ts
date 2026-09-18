@@ -10,6 +10,7 @@ export const STORAGE_KEYS = {
   geminiPreviousContext: "openrouterGeminiPreviousContext",
   geminiFollowingContext: "openrouterGeminiFollowingContext",
   geminiNarratorDirection: "openrouterGeminiNarratorDirection",
+  autoSmartRetry: "openrouterGeminiAutoSmartRetry",
   minimaxModel: "minimaxModel",
   minimaxVoiceIdOverride: "minimaxVoiceIdOverride",
   resembleVoiceIdOverride: "resembleVoiceIdOverride",

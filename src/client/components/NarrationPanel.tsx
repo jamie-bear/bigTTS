@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode, type RefObject } from "react";
-import { isOpenRouterGemini31Model, isOpenRouterPcmModel, MINIMAX_LANGUAGES, SEGMENT_OPTIONS } from "../config/providers";
+import { isOpenRouterGemini31Model, isOpenRouterGeminiModel, isOpenRouterPcmModel, MINIMAX_LANGUAGES, SEGMENT_OPTIONS } from "../config/providers";
 import type { useBigTtsController } from "../hooks/useBigTtsController";
 import { AudioPlayer } from "./AudioPlayer";
 import { ProviderSetup } from "./ProviderSetup";
@@ -17,6 +17,8 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
   const textNormalizationAvailable = Boolean(providerConfig.supportsTextNormalization);
   const unavailableCapabilityCount = Number(!lowLatencyAvailable) + Number(!textNormalizationAvailable);
   const gemini31OpenRouter = state.provider === "openrouter" && isOpenRouterGemini31Model(state.openrouterModel);
+  const geminiOpenRouter = state.provider === "openrouter" && isOpenRouterGeminiModel(state.openrouterModel);
+  const sessionActive = ["connecting", "generating", "pausing", "paused", "recoverable"].includes(state.phase);
   const geminiContextMeta = state.geminiPreviousContext && state.geminiFollowingContext
     ? "Both"
     : state.geminiPreviousContext
@@ -64,6 +66,10 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
           </>}
         />}
         <ProviderSynthesisSettings controller={controller} />
+        {geminiOpenRouter && <div className="field">
+          <Switch id="autoSmartRetry" label="Auto smart retry" checked={state.autoSmartRetry} disabled={sessionActive} onChange={(event) => actions.setAutoSmartRetry(event.target.checked)} />
+          <small className="field-help">Automatically split rejected text and continue without prompts. Words that still fail are skipped and listed. Choose before starting narration; remembered for this browser session.</small>
+        </div>}
         {gemini31OpenRouter && <Disclosure className="gemini-continuity-panel" summary="Gemini continuity" meta={geminiContextMeta} bodyClassName="gemini-continuity-settings">
           <Switch id="geminiPreviousContext" label="Send previous segment context" checked={state.geminiPreviousContext} onChange={(event) => actions.setGeminiPreviousContext(event.target.checked)} />
           <Switch id="geminiFollowingContext" label="Send following segment context" checked={state.geminiFollowingContext} onChange={(event) => actions.setGeminiFollowingContext(event.target.checked)} />

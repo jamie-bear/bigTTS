@@ -1,7 +1,8 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import type { ServerEvent } from "../../src/client/types/contracts";
-import { NarrationOutput, SegmentFailurePanel } from "../../src/client/components/NarrationPanel";
+import { NarrationOutput, SegmentFailurePanel, SettingsPanel } from "../../src/client/components/NarrationPanel";
+import { createInitialState } from "../../src/client/state/appState";
 import { useBigTtsController } from "../../src/client/hooks/useBigTtsController";
 
 const sessionMock = vi.hoisted(() => ({
@@ -33,6 +34,39 @@ beforeEach(() => {
   }));
 });
 afterEach(() => vi.unstubAllGlobals());
+
+it("offers opt-in Auto smart retry for Gemini, remembers it, and sends it with narration", async () => {
+  expect(createInitialState().autoSmartRetry).toBe(false);
+  const audioRef = { current: null };
+  const { result } = renderHook(() => useBigTtsController(audioRef));
+  act(() => result.current.actions.selectProvider("openrouter"));
+  act(() => {
+    result.current.actions.setCredential("key");
+    result.current.actions.setText("A sample passage.");
+  });
+  await waitFor(() => expect(result.current.state.openrouterModel).toContain("gemini"));
+  const panel = render(<SettingsPanel controller={result.current} />);
+  expect(screen.getByRole("checkbox", { name: "Auto smart retry" })).not.toBeChecked();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Auto smart retry" }));
+  expect(result.current.state.autoSmartRetry).toBe(true);
+  expect(sessionStorage.getItem("openrouterGeminiAutoSmartRetry")).toBe("true");
+  expect(createInitialState().autoSmartRetry).toBe(true);
+  await act(() => result.current.actions.startNarration());
+  expect(sessionMock.start).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ autoSmartRetry: true }) }));
+  panel.rerender(<SettingsPanel controller={result.current} />);
+  expect(screen.getByRole("checkbox", { name: "Auto smart retry" })).toBeDisabled();
+  act(() => sessionMock.events?.onEvent({ type: "smartRetryProgress", index: 1, attempts: 7, attemptLimit: 64, totalAttempts: 71, automatic: true, resolvedPieces: 30, skippedPieces: 1 }));
+  expect(result.current.state.status).toContain("Auto smart retry: segment 1 · attempt 71");
+  act(() => result.current.actions.stopNarration());
+  act(() => result.current.actions.selectProvider("gemini"));
+  panel.rerender(<SettingsPanel controller={result.current} />);
+  expect(screen.queryByRole("checkbox", { name: "Auto smart retry" })).not.toBeInTheDocument();
+  act(() => result.current.actions.setCredential("key"));
+  await act(() => result.current.actions.startNarration());
+  expect(sessionMock.start).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ autoSmartRetry: false }) }));
+  act(() => result.current.actions.setAutoSmartRetry(false));
+  expect(createInitialState().autoSmartRetry).toBe(false);
+});
 
 it("shows Smart retry only when the server offers it and explains checkpoint actions", () => {
   const onSmartRetry = vi.fn();

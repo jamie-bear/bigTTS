@@ -1272,15 +1272,23 @@ export function createNarrationSession(client) {
       boundaryBefore: segment.boundaryBefore, boundaryAfter: segment.boundaryAfter });
     const options = { ...state.options, geminiPreviousContext: false, geminiFollowingContext: false };
     try {
-      const complete = await runSmartRetry(checkpoint, {
+      const recoveryOptions = {
         index, signal: controller.signal,
-        onProgress: (progress) => sendJsonWs(client, { type: "smartRetryProgress", index, ...progress }),
+        onProgress: (progress) => sendJsonWs(client, {
+          type: "smartRetryProgress", index, ...progress,
+          automatic: state.options.autoSmartRetry, totalAttempts: checkpoint.attempts
+        }),
         synthesize: (piece, signal) => synthesizeOpenRouterSpeech({
           text: piece.text, previousContext: "", nextContext: "",
           boundaryBefore: piece.start === 0 ? segment.boundaryBefore : "forced",
           boundaryAfter: piece.end === checkpoint.textLength ? segment.boundaryAfter : "forced"
         }, options, state.apiKey, signal)
-      });
+      };
+      let complete;
+      do {
+        complete = await runSmartRetry(checkpoint, recoveryOptions);
+        if (generation !== state.generation || controller.signal.aborted) return;
+      } while (!complete && state.options.autoSmartRetry);
       if (generation !== state.generation || controller.signal.aborted) return;
       if (!complete) {
         reportSegmentFailure(new Error("Smart retry reached 64 piece attempts. Click Smart retry to continue saved progress."));
@@ -1493,6 +1501,11 @@ export function createNarrationSession(client) {
         return;
       }
 
+      if (state.options.autoSmartRetry && isOpenRouterGemini(state.options) && isTextRejection(error)) {
+        state.recoverableError = error;
+        run(smartRetryFailedSegment);
+        return;
+      }
       reportSegmentFailure(error);
       return;
     }
@@ -1573,6 +1586,7 @@ export function sanitizeOptions(raw) {
     maxSegmentBytes: provider === "google" ? GOOGLE_MAX_SEGMENT_BYTES : Number.POSITIVE_INFINITY,
     optimizeStreamingLatency,
     textNormalization,
+    autoSmartRetry: isOpenRouterGemini({ provider, model }) && raw.autoSmartRetry === true,
     geminiPreviousContext: gemini31OpenRouter
       && (raw.geminiPreviousContext === undefined ? legacyGeminiContinuity : raw.geminiPreviousContext !== false),
     geminiFollowingContext: gemini31OpenRouter

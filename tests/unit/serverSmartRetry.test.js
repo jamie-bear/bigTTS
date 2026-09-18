@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNarrationSession } from "../../src/server.js";
+import { createNarrationSession, sanitizeOptions } from "../../src/server.js";
 import { splitRetryText } from "../../src/server/smartRetry.js";
 
 const options = {
@@ -29,6 +29,76 @@ async function failedSession(text = "alpha beta gamma delta", override = {}) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("server Smart retry", () => {
+  it("automatically recovers past 64 attempts with no recovery prompt or command", async () => {
+    const text = Array.from({ length: 100 }, (_, index) => `word${index}`).join(" ");
+    const fetchMock = vi.fn(async (_url, init) => {
+      const value = transcript(init);
+      if (splitRetryText(value) || value === "word20") return rejected();
+      expect(JSON.parse(init.body).input).toContain("Previous: none\nFollowing: none");
+      return audio(Number(value.slice(4)));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new Client();
+    const session = createNarrationSession(client);
+    session.handleClientMessage({ type: "start", apiKey: "key", text, options: { ...options, autoSmartRetry: true } });
+    await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
+    expect(client.events("segmentFailed")).toEqual([]);
+    expect(client.events("smartRetryProgress").at(-1)).toMatchObject({ automatic: true, totalAttempts: 198, resolvedPieces: 99, skippedPieces: 1 });
+    expect(client.events("segmentDone")[0].omissions).toEqual([{ index: 1, text: "word20 " }]);
+    expect(client.audio).toEqual([Buffer.from(Array.from({ length: 100 }, (_, index) => index === 20 ? [] : [index, 0]).flat())]);
+    expect(fetchMock).toHaveBeenCalledTimes(200);
+  });
+
+  it("does not repeatedly auto-retry an operational failure inside recovery", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(rejected()).mockResolvedValueOnce(rejected())
+      .mockResolvedValueOnce(audio(1)).mockResolvedValueOnce(rejected(401, "Invalid API key"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { client } = await failedSession("alpha beta gamma delta", { autoSmartRetry: true });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(client.events("segmentFailed")[0]).toMatchObject({ smartRetryResumable: true, details: { status: 401 } });
+    expect(client.audio).toEqual([]);
+    expect(client.events("segmentSkipped")).toEqual([]);
+  });
+
+  it.each(["pause", "cancel"])("honors %s during automatic recovery", async (command) => {
+    let resolvePiece;
+    let signal;
+    const fetchMock = vi.fn().mockResolvedValueOnce(rejected()).mockResolvedValueOnce(rejected())
+      .mockImplementationOnce((_url, init) => {
+        signal = init.signal;
+        return new Promise((resolve) => { resolvePiece = resolve; });
+      }).mockImplementation(async () => audio(2));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new Client();
+    const session = createNarrationSession(client);
+    session.handleClientMessage({ type: "start", apiKey: "key", text: "A complete sentence with enough text to read aloud. ".repeat(20), options: { ...options, segmentChars: 300, autoSmartRetry: true } });
+    await vi.waitFor(() => expect(resolvePiece).toBeDefined());
+    session.handleClientMessage({ type: command });
+    resolvePiece(audio(1));
+    if (command === "cancel") {
+      expect(signal.aborted).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(client.audio).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } else {
+      await vi.waitFor(() => expect(client.events("paused")).toHaveLength(1));
+      expect(client.audio).toEqual([Buffer.from([1, 0, 2, 0])]);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      session.handleClientMessage({ type: "resume" });
+      await vi.waitFor(() => expect(client.events("complete")).toHaveLength(1));
+    }
+    expect(client.events("segmentFailed")).toEqual([]);
+  });
+
+  it("accepts only an explicit opt-in for OpenRouter Gemini", () => {
+    expect(sanitizeOptions(options).autoSmartRetry).toBe(false);
+    expect(sanitizeOptions({ ...options, autoSmartRetry: "true" }).autoSmartRetry).toBe(false);
+    expect(sanitizeOptions({ ...options, autoSmartRetry: true }).autoSmartRetry).toBe(true);
+    expect(sanitizeOptions({ ...options, model: "google/gemini-2.5-pro-preview-tts", autoSmartRetry: true }).autoSmartRetry).toBe(true);
+    expect(sanitizeOptions({ ...options, model: "openai/tts-1", autoSmartRetry: true }).autoSmartRetry).toBe(false);
+    for (const provider of ["gemini", "google"]) expect(sanitizeOptions({ ...options, provider, autoSmartRetry: true }).autoSmartRetry).toBe(false);
+  });
+
   it("buffers pieces sequentially, removes context, preserves settings and numbering, and reports omissions", async () => {
     const requests = [];
     let active = 0;

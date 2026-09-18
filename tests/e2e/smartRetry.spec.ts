@@ -1,5 +1,45 @@
 import { expect, test, type WebSocketRoute } from "@playwright/test";
 
+test("Auto smart retry persists and starts recovery without a manual command", async ({ page, context }) => {
+  let stream: WebSocketRoute | undefined;
+  const commands: string[] = [];
+  await page.route("**/api/google-oauth/status", (route) => route.fulfill({ json: { configured: false, connected: false } }));
+  await page.route("**/api/openrouter/models", (route) => route.fulfill({ json: { models: [{ id: "google/gemini-3.1-flash-tts-preview", name: "Gemini", voices: [{ value: "Kore", label: "Kore" }] }] } }));
+  await page.route("**/api/provider/balance", (route) => route.fulfill({ json: { available: false } }));
+  await context.routeWebSocket(/\/stream$/, (socket) => {
+    stream = socket;
+    socket.onMessage((message) => {
+      const command = JSON.parse(String(message));
+      commands.push(command.type);
+      if (command.type !== "start") return;
+      expect(command.options.autoSmartRetry).toBe(true);
+      socket.send(JSON.stringify({ type: "meta", audioEncoding: "pcm_s16le", sampleRate: 24000, channels: 1, totalSegments: 1 }));
+      socket.send(JSON.stringify({ type: "segment", index: 1, totalSegments: 1 }));
+      socket.send(JSON.stringify({ type: "smartRetryProgress", index: 1, attempts: 7, attemptLimit: 64, automatic: true, totalAttempts: 71, resolvedPieces: 30, skippedPieces: 1 }));
+    });
+  });
+  await page.goto("/");
+  await page.getByLabel("OpenRouter API key").fill("test-key");
+  await page.getByLabel("OpenRouter model").selectOption("google/gemini-3.1-flash-tts-preview");
+  const setting = page.getByRole("checkbox", { name: "Auto smart retry" });
+  await expect(setting).not.toBeChecked();
+  await setting.check();
+  await page.reload();
+  await page.getByLabel("OpenRouter API key").fill("test-key");
+  await expect(setting).toBeChecked();
+  await page.getByLabel("Book or chapter text").fill("A passage with rejected text.");
+  await page.getByRole("button", { name: "Start narration" }).click();
+  await expect(setting).toBeDisabled();
+  await expect(page.getByText(/Auto smart retry: segment 1 · attempt 71/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Smart retry", exact: true })).toBeHidden();
+  stream!.send(Buffer.alloc(4800));
+  stream!.send(JSON.stringify({ type: "segmentDone", index: 1, totalSegments: 1, omissions: [{ index: 1, text: "rejected" }] }));
+  stream!.send(JSON.stringify({ type: "complete" }));
+  await expect(page.getByText("Narration completed with 1 omitted text piece. WAV ready.")).toBeVisible();
+  await expect(setting).toBeEnabled();
+  expect(commands).toEqual(["start"]);
+});
+
 test("Smart retry shows progress, resumes a checkpoint, and keeps omissions visible for downloads", async ({ page, context }, testInfo) => {
   let stream: WebSocketRoute | undefined;
   let smartRetries = 0;
