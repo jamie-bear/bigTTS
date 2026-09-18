@@ -763,6 +763,11 @@ textarea.gemini-direction {
   gap: var(--space-2);
 }
 
+.smart-retry-button { width: 100%; }
+.omission-history { overflow-wrap: anywhere; }
+.omission-history ul { padding-inline-start: 1.25rem; }
+.omission-history li + li { margin-top: var(--space-2); }
+
 @media (max-width: 600px) {
   .setup-card,
   .output-card { padding: var(--space-4); }

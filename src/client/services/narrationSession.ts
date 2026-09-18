@@ -22,10 +22,12 @@ export class NarrationSession {
     socket.binaryType = "arraybuffer";
     this.socket = socket;
     socket.addEventListener("open", () => {
+      if (this.socket !== socket || this.intentionalClose) return;
       this.send(command);
       this.events.onOpen();
     });
     socket.addEventListener("message", (event) => {
+      if (this.socket !== socket || this.intentionalClose) return;
       if (typeof event.data === "string") {
         try { this.events.onEvent(JSON.parse(event.data) as ServerEvent); }
         catch { this.events.onError("The narration server returned an invalid event."); }
@@ -36,7 +38,9 @@ export class NarrationSession {
     socket.addEventListener("close", () => {
       if (this.socket === socket && !this.intentionalClose) this.events.onClose();
     });
-    socket.addEventListener("error", () => this.events.onError("Local stream error."));
+    socket.addEventListener("error", () => {
+      if (this.socket === socket && !this.intentionalClose) this.events.onError("Local stream error.");
+    });
   }
 
   cancel() {
@@ -51,6 +55,8 @@ export class NarrationSession {
   resume() { this.send({ type: "resume" }); }
 
   retrySegment() { this.send({ type: "retrySegment" }); }
+
+  smartRetrySegment() { this.send({ type: "smartRetrySegment" }); }
 
   skipSegment() { this.send({ type: "skipSegment" }); }
 

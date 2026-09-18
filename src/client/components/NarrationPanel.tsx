@@ -105,7 +105,12 @@ export function NarrationOutput({ controller, audioRef }: { controller: Controll
               <div className={`progress-rail ${state.phase === "connecting" ? "is-indeterminate" : ""}`.trim()}><progress value={state.progress} max={100} aria-label="Narration generation progress" /></div>
             </>}
       </div>
-      {state.segmentFailure && <SegmentFailurePanel failure={state.segmentFailure} onRetry={actions.retryFailedSegment} onSkip={actions.skipFailedSegment} />}
+      {state.segmentFailure && <SegmentFailurePanel failure={state.segmentFailure} onRetry={actions.retryFailedSegment} onSmartRetry={actions.smartRetryFailedSegment} onSkip={actions.skipFailedSegment} />}
+      {state.omissions.length > 0 && <details className="segment-failure omission-history">
+        <summary>{state.omissions.length} text {state.omissions.length === 1 ? "piece" : "pieces"} omitted by Smart retry</summary>
+        <p>These pieces were still rejected individually and are missing from playback and downloads.</p>
+        <ul>{state.omissions.map((omission, index) => <li key={index}>Segment {omission.index}: <q>{omission.text.trim()}</q></li>)}</ul>
+      </details>}
       {state.errorDetails && <details className="segment-failure"><summary>Provider diagnostics</summary><dl>
         <dt>Provider</dt><dd>{state.errorDetails.providerName}</dd>
         <dt>HTTP status</dt><dd>{state.errorDetails.status}</dd>
@@ -129,7 +134,7 @@ export function NarrationOutput({ controller, audioRef }: { controller: Controll
   </aside>;
 }
 
-function SegmentFailurePanel({ failure, onRetry, onSkip }: { failure: SegmentFailure; onRetry: () => void; onSkip: () => void }) {
+export function SegmentFailurePanel({ failure, onRetry, onSmartRetry, onSkip }: { failure: SegmentFailure; onRetry: () => void; onSmartRetry: () => void; onSkip: () => void }) {
   const details = failure.details;
   const hasDiagnostics = Boolean(details && Object.keys(details).length);
   return <div className="segment-failure" role="alert">
@@ -149,8 +154,13 @@ function SegmentFailurePanel({ failure, onRetry, onSkip }: { failure: SegmentFai
         {details?.routingSummary && <><dt>Routing</dt><dd>{details.routingSummary}</dd></>}
       </dl>
     </details>}
+    {failure.smartRetryAvailable && <>
+      <Button type="button" className="primary smart-retry-button" onClick={onSmartRetry}><Icon name="refresh" />Smart retry</Button>
+      <small>Splits rejected text into smaller pieces without surrounding context. Words that still fail are skipped.</small>
+    </>}
+    {failure.smartRetryResumable && <small>Smart retry continues saved progress. Retry segment restarts the whole segment; Skip segment omits it entirely. Both discard its saved recovery audio.</small>}
     <div className="segment-recovery-actions">
-      <Button type="button" className="primary" onClick={onRetry}><Icon name="refresh" />Retry segment</Button>
+      <Button type="button" className={failure.smartRetryAvailable ? undefined : "primary"} onClick={onRetry}><Icon name="refresh" />Retry segment</Button>
       <Button type="button" onClick={onSkip}><Icon name="play" />Skip segment</Button>
     </div>
     <small>Skipping continues with the next segment and omits this segment from the audio.</small>

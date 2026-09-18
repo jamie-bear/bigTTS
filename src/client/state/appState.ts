@@ -1,7 +1,7 @@
 import { PROVIDERS, activeSegmentLimits, isGoogleProvider } from "../config/providers";
 import { readCredentials, readProvider, readVoiceClones, readMinimaxSettings, readResembleSettings, readCloneSettings, STORAGE_KEYS } from "../services/storage";
 import { MINIMAX_MODELS, type MinimaxSettings, type ResembleSettings, type CloneSettings } from "../../shared/speechSettings.js";
-import type { ProviderErrorDetails } from "../types/contracts";
+import type { ProviderErrorDetails, TextOmission } from "../types/contracts";
 import type { GoogleAccessMethod, GoogleOAuthStatus, NarrationPhase, OpenRouterModel, ProviderBalance, ProviderId, SegmentFailure, SelectOption, StitchedAudio, VoiceClone } from "../types/contracts";
 
 export interface AppState {
@@ -42,6 +42,7 @@ export interface AppState {
   stitchedAudio: StitchedAudio | null;
   audioAvailable: boolean;
   segmentFailure: SegmentFailure | null;
+  omissions: TextOmission[];
   operationBusy: boolean;
 }
 
@@ -98,6 +99,7 @@ export function createInitialState(): AppState {
     stitchedAudio: null,
     audioAvailable: false,
     segmentFailure: null,
+    omissions: [],
     operationBusy: false
   };
 }

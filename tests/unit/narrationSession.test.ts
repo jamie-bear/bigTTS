@@ -66,14 +66,38 @@ describe("NarrationSession", () => {
     session.pause();
     session.resume();
     session.retrySegment();
+    session.smartRetrySegment();
     session.skipSegment();
-    expect(MockWebSocket.instance.sent.slice(-4).map((value) => JSON.parse(value))).toEqual([
+    expect(MockWebSocket.instance.sent.slice(-5).map((value) => JSON.parse(value))).toEqual([
       { type: "pause" },
       { type: "resume" },
       { type: "retrySegment" },
+      { type: "smartRetrySegment" },
       { type: "skipSegment" }
     ]);
     expect(MockWebSocket.instance.readyState).toBe(MockWebSocket.OPEN);
+    session.dispose();
+  });
+
+  it("ignores queued audio, events, opens, and errors from a cancelled or replaced socket", () => {
+    const events = { onOpen: vi.fn(), onEvent: vi.fn(), onAudio: vi.fn(), onClose: vi.fn(), onError: vi.fn() };
+    const session = new NarrationSession(events);
+    session.start(command);
+    const oldSocket = MockWebSocket.instance;
+    session.cancel();
+    const sendLateEvents = () => {
+      oldSocket.dispatchEvent(new Event("open"));
+      oldSocket.dispatchEvent(new MessageEvent("message", { data: new ArrayBuffer(2) }));
+      oldSocket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "complete" }) }));
+      oldSocket.dispatchEvent(new Event("error"));
+    };
+    sendLateEvents();
+    session.start(command);
+    sendLateEvents();
+    for (const callback of Object.values(events)) expect(callback).not.toHaveBeenCalled();
+    MockWebSocket.instance.dispatchEvent(new Event("open"));
+    expect(events.onOpen).toHaveBeenCalledTimes(1);
+    expect(MockWebSocket.instance.sent.map((value) => JSON.parse(value))).toEqual([command]);
     session.dispose();
   });
 });

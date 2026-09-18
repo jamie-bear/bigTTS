@@ -12,9 +12,11 @@ import {
   createGeminiNarrationSegments,
   isOpenRouterGemini31Model,
   requestOpenRouterGemini31Speech,
+  prepareGeminiTranscript,
   sanitizeNarratorDirection
 } from "./server/geminiContinuity.js";
 import { openRouterErrorDetails, requestOpenRouterSpeech } from "./server/openRouterSpeech.js";
+import { createSmartRetry, runSmartRetry, isOpenRouterGemini, isTextRejection } from "./server/smartRetry.js";
 import { MINIMAX_MODELS, MINIMAX_LANGUAGES, MINIMAX_MAX_CHARS, RESEMBLE_MAX_CHARS, minimaxLanguageSupported, normalizeMinimaxSettings, normalizeResembleSettings, normalizeCloneSettings } from "./shared/speechSettings.js";
 import { withProviderTimeout, providerError, parseMiniMaxJson, stringifyMiniMaxPayload, miniMaxFileId, validateCloneAudio, decodeMiniMaxAudio, decodeResembleWav, buildResembleData, splitResembleText } from "./server/providerContracts.js";
 
@@ -992,6 +994,8 @@ function sendGoogleOAuthResult(res, status, { title, message, success }) {
 
 export function createNarrationSession(client) {
   const state = {
+    generation: 0,
+    smartRetry: null,
     active: false,
     cancelled: false,
     pauseRequested: false,
@@ -1010,7 +1014,7 @@ export function createNarrationSession(client) {
   return {
     handleClientMessage(message) {
       if (message.type === "start") {
-        start(message).catch((error) => fail(error));
+        run(() => start(message));
         return;
       }
 
@@ -1020,17 +1024,22 @@ export function createNarrationSession(client) {
       }
 
       if (message.type === "resume") {
-        resume().catch((error) => fail(error));
+        run(resume);
         return;
       }
 
       if (message.type === "retrySegment") {
-        retryFailedSegment().catch((error) => fail(error));
+        run(retryFailedSegment);
+        return;
+      }
+
+      if (message.type === "smartRetrySegment") {
+        run(smartRetryFailedSegment);
         return;
       }
 
       if (message.type === "skipSegment") {
-        skipFailedSegment().catch((error) => fail(error));
+        run(skipFailedSegment);
         return;
       }
 
@@ -1041,10 +1050,19 @@ export function createNarrationSession(client) {
     cancel
   };
 
+  function run(operation) {
+    const promise = operation();
+    const generation = state.generation;
+    promise.catch((error) => {
+      if (generation === state.generation) fail(error);
+    });
+  }
+
   async function start(message) {
     if (state.active) {
       cancel("Restarting narration.");
     }
+    const generation = ++state.generation;
 
     const apiKey = String(message.apiKey || "").trim();
     const text = normalizeText(String(message.text || ""));
@@ -1060,6 +1078,8 @@ export function createNarrationSession(client) {
       throw new Error("Paste text or load a .txt file before starting narration.");
     }
 
+    if (generation !== state.generation) return;
+    state.smartRetry = null;
     state.active = true;
     state.cancelled = false;
     state.pauseRequested = false;
@@ -1129,6 +1149,7 @@ export function createNarrationSession(client) {
   }
 
   async function pumpNextSegment() {
+    const generation = state.generation;
     if (!state.active || state.cancelled || state.waitingForAudioDone || state.recoverableError) return;
 
     if (state.segmentIndex >= state.segments.length) {
@@ -1143,7 +1164,7 @@ export function createNarrationSession(client) {
     }
 
     await connectUpstream();
-    if (!state.active || state.cancelled || state.paused) return;
+    if (generation !== state.generation || !state.active || state.cancelled || state.paused) return;
     if (state.pauseRequested) {
       enterPaused();
       return;
@@ -1201,6 +1222,7 @@ export function createNarrationSession(client) {
   async function retryFailedSegment() {
     if (!state.active || state.cancelled || !state.recoverableError || state.waitingForAudioDone) return;
     const index = state.segmentIndex + 1;
+    state.smartRetry = null;
     state.recoverableError = null;
     sendJsonWs(client, { type: "segmentRetrying", index, totalSegments: state.segments.length });
     await sendSegment(state.segments[state.segmentIndex]);
@@ -1209,10 +1231,79 @@ export function createNarrationSession(client) {
   async function skipFailedSegment() {
     if (!state.active || state.cancelled || !state.recoverableError || state.waitingForAudioDone) return;
     const index = state.segmentIndex + 1;
+    state.smartRetry = null;
     state.recoverableError = null;
     state.segmentIndex += 1;
     state.automaticSegmentRetries = 0;
     sendJsonWs(client, { type: "segmentSkipped", index, totalSegments: state.segments.length });
+    await pumpNextSegment();
+  }
+
+  function smartRetryAvailable(error) {
+    return isOpenRouterGemini(state.options) && (Boolean(state.smartRetry) || isTextRejection(error));
+  }
+
+  function reportSegmentFailure(error) {
+    state.waitingForAudioDone = false;
+    state.pauseRequested = false;
+    state.paused = false;
+    state.recoverableError = error;
+    sendJsonWs(client, {
+      type: "segmentFailed", index: state.segmentIndex + 1, totalSegments: state.segments.length,
+      message: error.message || String(error), details: openRouterErrorDetails(error),
+      smartRetryAvailable: smartRetryAvailable(error), smartRetryResumable: Boolean(state.smartRetry)
+    });
+  }
+
+  async function smartRetryFailedSegment() {
+    if (!state.active || state.cancelled || !state.recoverableError || state.waitingForAudioDone
+      || !smartRetryAvailable(state.recoverableError)) return;
+    const segment = state.segments[state.segmentIndex];
+    const index = state.segmentIndex + 1;
+    const generation = state.generation;
+    state.smartRetry ||= createSmartRetry(isOpenRouterGemini31Model(state.options.model) ? prepareGeminiTranscript(segment.text) : segment.text);
+    const checkpoint = state.smartRetry;
+    const controller = new AbortController();
+    state.currentRequest = controller;
+    state.recoverableError = null;
+    state.waitingForAudioDone = true;
+    sendJsonWs(client, { type: "segmentRetrying", index, totalSegments: state.segments.length });
+    sendJsonWs(client, { type: "segment", index, totalSegments: state.segments.length,
+      boundaryBefore: segment.boundaryBefore, boundaryAfter: segment.boundaryAfter });
+    const options = { ...state.options, geminiPreviousContext: false, geminiFollowingContext: false };
+    try {
+      const complete = await runSmartRetry(checkpoint, {
+        index, signal: controller.signal,
+        onProgress: (progress) => sendJsonWs(client, { type: "smartRetryProgress", index, ...progress }),
+        synthesize: (piece, signal) => synthesizeOpenRouterSpeech({
+          text: piece.text, previousContext: "", nextContext: "",
+          boundaryBefore: piece.start === 0 ? segment.boundaryBefore : "forced",
+          boundaryAfter: piece.end === checkpoint.textLength ? segment.boundaryAfter : "forced"
+        }, options, state.apiKey, signal)
+      });
+      if (generation !== state.generation || controller.signal.aborted) return;
+      if (!complete) {
+        reportSegmentFailure(new Error("Smart retry reached 64 piece attempts. Click Smart retry to continue saved progress."));
+        return;
+      }
+    } catch (error) {
+      if (generation === state.generation && !controller.signal.aborted) reportSegmentFailure(error);
+      return;
+    } finally {
+      if (state.currentRequest === controller) state.currentRequest = null;
+    }
+
+    if (checkpoint.audio.length && client.readyState === WebSocketConnection.OPEN) {
+      client.send(Buffer.concat(checkpoint.audio), { binary: true });
+    }
+    state.waitingForAudioDone = false;
+    sendJsonWs(client, {
+      type: checkpoint.audio.length ? "segmentDone" : "segmentSkipped",
+      index, totalSegments: state.segments.length, attempts: checkpoint.attempts, omissions: checkpoint.omissions
+    });
+    state.smartRetry = null;
+    state.segmentIndex += 1;
+    state.automaticSegmentRetries = 0;
     await pumpNextSegment();
   }
 
@@ -1268,12 +1359,13 @@ export function createNarrationSession(client) {
   }
 
   async function synthesizeBufferedSegment(synthesize) {
+    const generation = state.generation;
     const controller = new AbortController();
     state.currentRequest = controller;
 
     try {
       const result = await synthesize(controller.signal);
-      if (state.cancelled) return;
+      if (state.cancelled || controller.signal.aborted || generation !== state.generation) return;
       const chunk = Buffer.isBuffer(result) ? result : result.audio;
 
       if (client.readyState === WebSocketConnection.OPEN) {
@@ -1348,6 +1440,7 @@ export function createNarrationSession(client) {
     state.pauseRequested = false;
     state.paused = false;
     state.recoverableError = null;
+    state.smartRetry = null;
     sendJsonWs(client, { type: "complete" });
 
     closeUpstream();
@@ -1357,6 +1450,8 @@ export function createNarrationSession(client) {
     if (state.cancelled) return;
 
     state.cancelled = true;
+    state.generation += 1;
+    state.smartRetry = null;
     state.active = false;
     state.pauseRequested = false;
     state.paused = false;
@@ -1394,20 +1489,11 @@ export function createNarrationSession(client) {
           type: "status",
           message: `Segment ${state.segmentIndex + 1} failed; retrying automatically...`
         });
-        sendSegment(state.segments[state.segmentIndex]).catch((retryError) => fail(retryError));
+        run(() => sendSegment(state.segments[state.segmentIndex]));
         return;
       }
 
-      state.pauseRequested = false;
-      state.paused = false;
-      state.recoverableError = error;
-      sendJsonWs(client, {
-        type: "segmentFailed",
-        index: state.segmentIndex + 1,
-        totalSegments: state.segments.length,
-        message: error.message || String(error),
-        details: openRouterErrorDetails(error)
-      });
+      reportSegmentFailure(error);
       return;
     }
 

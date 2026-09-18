@@ -282,6 +282,11 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
   }, [setStatus]);
 
   const handleServerEvent = useCallback((event: ServerEvent) => {
+    if ((event.type === "segmentDone" || event.type === "segmentSkipped") && event.omissions?.length) {
+      const omissions = [...stateRef.current.omissions, ...event.omissions];
+      stateRef.current = { ...stateRef.current, omissions };
+      dispatch({ type: "patch", patch: { omissions } });
+    }
     if (event.type === "meta") {
       audioEngineRef.current?.configure(event.audioEncoding, event.sampleRate, event.channels);
       dispatch({ type: "patch", patch: { totalSegments: event.totalSegments, currentSegment: 0, progress: 0, status: `Prepared ${event.totalSegments} streaming segments.` } });
@@ -303,8 +308,12 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     } else if (event.type === "resumed") {
       stateRef.current = { ...stateRef.current, phase: "generating" };
       dispatch({ type: "patch", patch: { phase: "generating", totalSegments: event.totalSegments, status: `Generation resumed. Preparing segment ${event.nextSegment}...` } });
+    } else if (event.type === "smartRetryProgress") {
+      const pausing = stateRef.current.phase === "pausing";
+      setStatus(`Smart retry: segment ${event.index} · attempt ${event.attempts}/${event.attemptLimit} · ${event.resolvedPieces} pieces recovered · ${event.skippedPieces} skipped${pausing ? " · will pause after this segment" : ""}.`);
     } else if (event.type === "segmentFailed") {
-      const segmentFailure = { index: event.index, totalSegments: event.totalSegments, message: event.message, details: event.details };
+      const segmentFailure = { index: event.index, totalSegments: event.totalSegments, message: event.message, details: event.details,
+        smartRetryAvailable: event.smartRetryAvailable, smartRetryResumable: event.smartRetryResumable };
       stateRef.current = { ...stateRef.current, phase: "recoverable", segmentFailure };
       const stitchedAudio = audioEngineRef.current?.snapshot() || null;
       dispatch({
@@ -317,7 +326,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
           segmentFailure,
           stitchedAudio,
           audioAvailable: Boolean(stitchedAudio),
-          status: `Segment ${event.index} needs attention. Retry it or skip it to continue.`
+          status: `Segment ${event.index} needs attention. ${event.smartRetryAvailable ? "Use Smart retry, retry" : "Retry"} or skip it to continue.`
         }
       });
     } else if (event.type === "segmentRetrying") {
@@ -329,7 +338,11 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     } else if (event.type === "complete") {
       stateRef.current = { ...stateRef.current, phase: "completed" };
       const stitchedAudio = audioEngineRef.current?.complete() || null;
-      dispatch({ type: "patch", patch: { phase: "completed", progress: 100, segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `Narration fully generated. Continuous ${stitchedAudio.extension.toUpperCase()} ready.` : "Narration fully generated, but no audio was received." } });
+      const omitted = stateRef.current.omissions.length;
+      const status = omitted
+        ? `Narration completed with ${omitted} omitted text ${omitted === 1 ? "piece" : "pieces"}. ${stitchedAudio ? `${stitchedAudio.extension.toUpperCase()} ready.` : "No audio was received."}`
+        : stitchedAudio ? `Narration fully generated. Continuous ${stitchedAudio.extension.toUpperCase()} ready.` : "Narration fully generated, but no audio was received.";
+      dispatch({ type: "patch", patch: { phase: "completed", progress: 100, segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status } });
     } else if (event.type === "cancelled") {
       stateRef.current = { ...stateRef.current, phase: "stopped" };
       const stitchedAudio = audioEngineRef.current?.finalize() || null;
@@ -373,9 +386,10 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       geminiNarratorDirection: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) ? current.geminiNarratorDirection : ""
     };
     const initialPcm = current.provider === "gemini" || current.provider === "google" || current.provider === "resemble" || (current.provider === "openrouter" && isOpenRouterPcmModel(current.openrouterModel));
+    sessionRef.current?.dispose();
     audioEngineRef.current?.reset(initialPcm ? "pcm_s16le" : "mpeg");
-    stateRef.current = { ...stateRef.current, phase: "connecting" };
-    dispatch({ type: "patch", patch: { phase: "connecting", errorDetails: null, status: "Opening local narration stream...", progress: 0, currentSegment: 0, totalSegments: 0, segmentFailure: null, stitchedAudio: null, audioAvailable: false } });
+    stateRef.current = { ...stateRef.current, phase: "connecting", omissions: [] };
+    dispatch({ type: "patch", patch: { phase: "connecting", omissions: [], errorDetails: null, status: "Opening local narration stream...", progress: 0, currentSegment: 0, totalSegments: 0, segmentFailure: null, stitchedAudio: null, audioAvailable: false } });
     const session = new NarrationSession({
       onOpen: () => setStatus("Narration stream connected."), onEvent: handleServerEvent,
       onAudio: (chunk) => audioEngineRef.current?.push(chunk),
@@ -431,6 +445,13 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     sessionRef.current?.skipSegment();
     stateRef.current = { ...stateRef.current, phase: "generating", segmentFailure: null };
     dispatch({ type: "patch", patch: { phase: "generating", segmentFailure: null, status: `Skipping segment ${stateRef.current.currentSegment}...` } });
+  }, []);
+
+  const smartRetryFailedSegment = useCallback(() => {
+    if (stateRef.current.phase !== "recoverable" || !stateRef.current.segmentFailure?.smartRetryAvailable) return;
+    sessionRef.current?.smartRetrySegment();
+    stateRef.current = { ...stateRef.current, phase: "generating", segmentFailure: null };
+    dispatch({ type: "patch", patch: { phase: "generating", segmentFailure: null, status: `Smart retry: segment ${stateRef.current.currentSegment}...` } });
   }, []);
 
   const disconnectGoogle = useCallback(async () => {
@@ -512,7 +533,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       clearText: () => dispatch({ type: "patch", patch: { text: "" } }),
       loadTextFile: async (file: File) => dispatch({ type: "patch", patch: { text: await file.text(), status: `Loaded ${file.name}.` } }),
       saveMinimaxClone, refreshMinimaxVoices, deleteMinimaxClone, renameMinimaxClone,
-      connectGoogle, disconnectGoogle, refreshGoogle, startNarration, pauseGeneration, resumeGeneration, retryFailedSegment, skipFailedSegment, stopNarration, download
+      connectGoogle, disconnectGoogle, refreshGoogle, startNarration, pauseGeneration, resumeGeneration, retryFailedSegment, smartRetryFailedSegment, skipFailedSegment, stopNarration, download
     }
   };
 }

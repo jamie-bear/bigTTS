@@ -113,20 +113,28 @@ export interface SegmentFailure {
   totalSegments: number;
   message: string;
   details?: ProviderErrorDetails;
+  smartRetryAvailable?: boolean;
+  smartRetryResumable?: boolean;
 }
 
-export type ClientCommand = StartNarrationCommand | { type: "pause" | "resume" | "retrySegment" | "skipSegment" | "cancel" };
+export interface TextOmission {
+  index: number;
+  text: string;
+}
+
+export type ClientCommand = StartNarrationCommand | { type: "pause" | "resume" | "retrySegment" | "smartRetrySegment" | "skipSegment" | "cancel" };
 
 export type ServerEvent =
   | { type: "meta"; audioEncoding: AudioEncoding; sampleRate: number; channels: number; totalSegments: number }
   | { type: "status"; message: string }
   | { type: "segment"; index: number; totalSegments: number; boundaryBefore?: GeminiBoundary; boundaryAfter?: GeminiBoundary }
-  | { type: "segmentDone"; index: number; totalSegments: number; generationId?: string; attempts?: number }
+  | { type: "segmentDone"; index: number; totalSegments: number; generationId?: string; attempts?: number; omissions?: TextOmission[] }
+  | { type: "smartRetryProgress"; index: number; attempts: number; attemptLimit: number; resolvedPieces: number; skippedPieces: number }
   | { type: "pausePending"; currentSegment: number; totalSegments: number }
   | { type: "paused"; completedSegments: number; totalSegments: number }
   | { type: "resumed"; nextSegment: number; totalSegments: number }
-  | { type: "segmentFailed"; index: number; totalSegments: number; message: string; details?: OpenRouterErrorDetails }
-  | { type: "segmentRetrying" | "segmentSkipped"; index: number; totalSegments: number }
+  | ({ type: "segmentFailed" } & SegmentFailure)
+  | { type: "segmentRetrying" | "segmentSkipped"; index: number; totalSegments: number; omissions?: TextOmission[] }
   | { type: "complete" }
   | { type: "cancelled" | "error"; message?: string; details?: ProviderErrorDetails };
 
