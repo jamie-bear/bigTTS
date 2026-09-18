@@ -20,7 +20,7 @@ describe("MiniMax voice-clone payload", () => {
   });
 
   it("omits validation and prompt fields when they are not supplied", () => {
-    const payload = buildMiniMaxVoiceClonePayload({ sourceFileId: "file-1", voiceId: "narrator" });
+    const payload = buildMiniMaxVoiceClonePayload({ sourceFileId: "123", voiceId: "narrator" });
     expect(payload).not.toHaveProperty("text_validation");
     expect(payload).not.toHaveProperty("clone_prompt");
   });

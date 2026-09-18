@@ -1,4 +1,4 @@
-import type { GoogleOAuthStatus, OpenRouterModel, ProviderBalance, ProviderId, VoiceClone } from "../types/contracts";
+import type { GoogleOAuthStatus, OpenRouterModel, ProviderBalance, ProviderErrorDetails, ProviderId, VoiceClone } from "../types/contracts";
 
 async function request<T>(url: string, init?: RequestInit, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { ...init, signal, headers: { "Content-Type": "application/json", ...init?.headers } });
@@ -6,8 +6,9 @@ async function request<T>(url: string, init?: RequestInit, signal?: AbortSignal)
   let body: unknown = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = {}; }
   if (!response.ok) {
-    const error = body as { error?: string; message?: string };
-    throw new Error(error.error || error.message || `${response.status} ${response.statusText}`);
+    const error = body as { error?: string; message?: string; details?: ProviderErrorDetails };
+    const diagnostics = [error.details?.providerCode && `provider code ${error.details.providerCode}`, error.details?.requestId && `request ID ${error.details.requestId}`].filter(Boolean).join("; ");
+    throw Object.assign(new Error(`${error.error || error.message || `${response.status} ${response.statusText}`}${diagnostics ? ` (${diagnostics})` : ""}`), { details: error.details });
   }
   return body as T;
 }
@@ -20,7 +21,7 @@ export const api = {
   minimaxVoices: (apiKey: string, signal?: AbortSignal) => post<{ voices: VoiceClone[] }>("/api/minimax/voices", { apiKey }, signal),
   createMinimaxVoice: (payload: Record<string, unknown>, signal?: AbortSignal) => post<{ voice: VoiceClone }>("/api/minimax/voices/create", payload, signal),
   deleteMinimaxVoice: (apiKey: string, voiceId: string, signal?: AbortSignal) => post<{ ok: boolean }>("/api/minimax/voices/delete", { apiKey, voiceId }, signal),
-  resembleVoices: (apiKey: string, signal?: AbortSignal) => post<{ voices: VoiceClone[] }>("/api/resemble/voices", { apiKey }, signal),
+  resembleVoices: (apiKey: string, signal?: AbortSignal) => post<{ voices: VoiceClone[]; warning?: string }>("/api/resemble/voices", { apiKey }, signal),
   googleStatus: (signal?: AbortSignal) => request<GoogleOAuthStatus>("/api/google-oauth/status", { cache: "no-store" }, signal),
   disconnectGoogle: (signal?: AbortSignal) => request<GoogleOAuthStatus>("/api/google-oauth/disconnect", { method: "POST" }, signal)
 };

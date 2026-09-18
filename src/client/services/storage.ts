@@ -1,5 +1,6 @@
 import { PROVIDERS, isProviderId } from "../config/providers";
 import type { ProviderId, VoiceClone } from "../types/contracts";
+import { normalizeMinimaxSettings, normalizeResembleSettings, normalizeCloneSettings } from "../../shared/speechSettings.js";
 
 export const STORAGE_KEYS = {
   provider: "ttsProvider",
@@ -12,7 +13,10 @@ export const STORAGE_KEYS = {
   minimaxModel: "minimaxModel",
   minimaxVoiceIdOverride: "minimaxVoiceIdOverride",
   resembleVoiceIdOverride: "resembleVoiceIdOverride",
-  minimaxVoiceClones: "minimaxVoiceClones"
+  minimaxVoiceClones: "minimaxVoiceClones",
+  minimaxSettings: "minimaxSynthesisSettings",
+  resembleSettings: "resembleSynthesisSettings",
+  cloneSettings: "minimaxCloneSettings"
 } as const;
 
 export function readProvider(): ProviderId {
@@ -53,5 +57,16 @@ export function writeVoiceClones(key: "minimaxVoiceClones", voices: VoiceClone[]
 function toStoredVoiceClone(voice: VoiceClone): VoiceClone {
   const id = String(voice.id || "");
   const model = typeof voice.model === "string" && voice.model ? voice.model : undefined;
-  return { id, name: String(voice.name || id), ...(model ? { model } : {}) };
+  return { id, name: String(voice.name || id), ...(model ? { model } : {}),
+    ...(typeof voice.available === "boolean" ? { available: voice.available } : {}),
+    ...(typeof voice.createdAt === "string" ? { createdAt: voice.createdAt } : {}) };
 }
+
+function readSettings<T>(key: string, normalize: (value?: Partial<T>) => T): T {
+  try { return normalize(JSON.parse(sessionStorage.getItem(key) || "{}")); }
+  catch { return normalize(); }
+}
+
+export const readMinimaxSettings = (model: string) => readSettings<ReturnType<typeof normalizeMinimaxSettings>>(STORAGE_KEYS.minimaxSettings, (raw) => normalizeMinimaxSettings(raw, model));
+export const readResembleSettings = () => readSettings(STORAGE_KEYS.resembleSettings, normalizeResembleSettings);
+export const readCloneSettings = () => readSettings(STORAGE_KEYS.cloneSettings, normalizeCloneSettings);

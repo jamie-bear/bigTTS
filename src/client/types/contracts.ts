@@ -1,3 +1,4 @@
+import type { MinimaxSettings, ResembleSettings } from "../../shared/speechSettings.js";
 export type ProviderId = "gemini" | "xai" | "google" | "openrouter" | "resemble" | "minimax";
 export type GoogleAccessMethod = "api-key" | "oauth";
 
@@ -40,6 +41,10 @@ export interface VoiceClone {
   languages?: string[];
   gender?: string;
   model?: string;
+  status?: string;
+  available?: boolean;
+  unavailableReason?: string;
+  createdAt?: string;
 }
 
 export interface OpenRouterModel {
@@ -65,6 +70,8 @@ export interface ProviderBalance {
 }
 
 export interface NarrationOptions {
+  minimax?: MinimaxSettings;
+  resemble?: ResembleSettings;
   provider: ProviderId;
   voice: string;
   language: string;
@@ -85,7 +92,7 @@ export interface StartNarrationCommand {
   options: NarrationOptions;
 }
 
-export interface OpenRouterErrorDetails {
+export interface ProviderErrorDetails {
   status?: number;
   code?: string;
   errorType?: string;
@@ -99,11 +106,13 @@ export interface OpenRouterErrorDetails {
   attempts?: number;
 }
 
+export type OpenRouterErrorDetails = ProviderErrorDetails;
+
 export interface SegmentFailure {
   index: number;
   totalSegments: number;
   message: string;
-  details?: OpenRouterErrorDetails;
+  details?: ProviderErrorDetails;
 }
 
 export type ClientCommand = StartNarrationCommand | { type: "pause" | "resume" | "retrySegment" | "skipSegment" | "cancel" };
@@ -119,7 +128,7 @@ export type ServerEvent =
   | { type: "segmentFailed"; index: number; totalSegments: number; message: string; details?: OpenRouterErrorDetails }
   | { type: "segmentRetrying" | "segmentSkipped"; index: number; totalSegments: number }
   | { type: "complete" }
-  | { type: "cancelled" | "error"; message?: string };
+  | { type: "cancelled" | "error"; message?: string; details?: ProviderErrorDetails };
 
 export interface StitchedAudio {
   blob: Blob;

@@ -6,6 +6,8 @@ import { NarrationSession } from "../services/narrationSession";
 import { STORAGE_KEYS, writeCredential, writeVoiceClones } from "../services/storage";
 import { appReducer, createInitialState } from "../state/appState";
 import type { GoogleAccessMethod, NarrationOptions, ProviderId, SelectOption, ServerEvent, VoiceClone } from "../types/contracts";
+import { minimaxLanguageSupported, minimaxEmotionSupported, minimaxPrice, normalizeMinimaxSettings, normalizeResembleSettings, type MinimaxSettings, type ResembleSettings, type CloneSettings } from "../../shared/speechSettings.js";
+import { validateCloneFile } from "../services/cloneAudio";
 
 const MAX_MINIMAX_SAMPLE_BYTES = 20 * 1024 * 1024;
 
@@ -127,17 +129,19 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
           setStatus(models.length ? `Loaded ${models.length.toLocaleString()} OpenRouter speech models.` : "No OpenRouter speech models were returned.");
         } else if (current.provider === "resemble") {
           if (!key) { dispatch({ type: "patch", patch: { resembleVoices: [], voice: "" } }); return; }
-          const { voices } = await api.resembleVoices(key, controller.signal);
+          const { voices, warning } = await api.resembleVoices(key, controller.signal);
           if (controller.signal.aborted || stateRef.current.provider !== "resemble") return;
-          dispatch({ type: "patch", patch: { resembleVoices: voices, voice: voices[0]?.id || "" } });
+          dispatch({ type: "patch", patch: { resembleVoices: voices, voice: voices.find((voice) => voice.available !== false)?.id || "", discoveryWarning: warning || "" } });
           setStatus(voices.length ? `Loaded ${voices.length.toLocaleString()} Resemble.ai custom voice${voices.length === 1 ? "" : "s"}.` : "No ready Resemble.ai custom voices were returned for this key.");
         } else if (current.provider === "minimax") {
           let remote: VoiceClone[] = [];
-          if (key) remote = (await api.minimaxVoices(key, controller.signal)).voices || [];
+          if (!key) return;
+          remote = (await api.minimaxVoices(key, controller.signal)).voices || [];
           if (controller.signal.aborted || stateRef.current.provider !== "minimax") return;
-          const merged = mergeVoices(current.minimaxVoices, remote);
+          const latest = stateRef.current;
+          const merged = mergeVoices(latest.minimaxVoices, remote);
           writeVoiceClones("minimaxVoiceClones", merged);
-          dispatch({ type: "patch", patch: { minimaxVoices: merged, voice: current.voice || merged[0]?.id || "" } });
+          dispatch({ type: "patch", patch: { minimaxVoices: merged, voice: latest.voice || merged[0]?.id || "" } });
         }
       } catch (error) {
         if (!controller.signal.aborted) setStatus(`${PROVIDERS[current.provider].label} discovery failed: ${errorMessage(error)}`);
@@ -153,9 +157,11 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     dispatch({ type: "patch", patch: { operationBusy: true } });
     try {
       const remote = (await api.minimaxVoices(apiKey)).voices || [];
-      const voices = mergeVoices(stateRef.current.minimaxVoices, remote);
+      const latest = stateRef.current;
+      if (latest.credentials.minimax.trim() !== apiKey) return;
+      const voices = mergeVoices(latest.minimaxVoices, remote);
       writeVoiceClones("minimaxVoiceClones", voices);
-      dispatch({ type: "patch", patch: { minimaxVoices: voices, voice: stateRef.current.voice || voices[0]?.id || "", status: `Loaded ${voices.length.toLocaleString()} MiniMax custom voice${voices.length === 1 ? "" : "s"}.` } });
+      dispatch({ type: "patch", patch: { minimaxVoices: voices, ...(latest.provider === "minimax" ? { voice: latest.voice || voices[0]?.id || "", status: `Loaded ${voices.length.toLocaleString()} MiniMax custom voice${voices.length === 1 ? "" : "s"}.` } : {}) } });
     } catch (error) {
       setStatus(`MiniMax voice refresh failed: ${errorMessage(error)}`);
     } finally {
@@ -167,8 +173,8 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
   const openrouterBaseVoices = state.openrouterVoiceOptions[state.openrouterModel] || providerConfig.voices;
   const voiceOptions = useMemo<SelectOption[]>(() => {
     let options: SelectOption[];
-    if (state.provider === "resemble") options = state.resembleVoices.length ? state.resembleVoices.map((voice) => ({ value: voice.id, label: voice.languages?.[0] ? `${voice.name} (${voice.languages[0]})` : voice.name, gender: voice.gender })) : providerConfig.voices;
-    else if (state.provider === "minimax") options = state.minimaxVoices.length ? state.minimaxVoices.map((voice) => ({ value: voice.id, label: voice.model ? `${voice.name} (${voice.model})` : voice.name, gender: voice.gender })) : providerConfig.voices;
+    if (state.provider === "resemble") options = state.resembleVoices.length ? state.resembleVoices.map((voice) => ({ value: voice.id, label: `${voice.name}${voice.languages?.[0] ? ` (${voice.languages[0]})` : ""}${voice.available === false ? " — unavailable" : ""}`, gender: voice.gender, disabled: voice.available === false })) : providerConfig.voices;
+    else if (state.provider === "minimax") options = state.minimaxVoices.length ? state.minimaxVoices.map((voice) => ({ value: voice.id, label: `${voice.name}${voice.model ? ` (${voice.model})` : ""}${voice.available === false ? " — unavailable" : ""}`, gender: voice.gender })) : providerConfig.voices;
     else options = state.provider === "openrouter"
       ? openrouterBaseVoices.map((voice) => ({ ...voice, gender: voice.gender || knownModelVoiceGender(state.openrouterModel, voice.value) }))
       : providerConfig.voices;
@@ -217,7 +223,10 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
 
   const setMinimaxModel = useCallback((model: string) => {
     sessionStorage.setItem(STORAGE_KEYS.minimaxModel, model);
-    dispatch({ type: "patch", patch: { minimaxModel: model } });
+    const current = stateRef.current;
+    const minimaxSettings = { ...current.minimaxSettings, emotion: minimaxEmotionSupported(current.minimaxSettings.emotion, model) ? current.minimaxSettings.emotion : "" };
+    sessionStorage.setItem(STORAGE_KEYS.minimaxSettings, JSON.stringify(minimaxSettings));
+    dispatch({ type: "patch", patch: { minimaxModel: model, minimaxSettings, language: minimaxLanguageSupported(current.language, model) ? current.language : "auto" } });
   }, []);
 
   const saveMinimaxClone = useCallback(async (values: { name: string; languageModel: string; promptText: string; validationText: string; source?: File; prompt?: File }) => {
@@ -230,8 +239,11 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     if ((values.prompt && !values.promptText.trim()) || (!values.prompt && values.promptText.trim())) return setStatus("MiniMax prompt audio and prompt text must be provided together.");
     dispatch({ type: "patch", patch: { operationBusy: true } });
     try {
+      await validateCloneFile(values.source);
+      if (values.prompt) await validateCloneFile(values.prompt, true);
       const payload = {
         apiKey, name: values.name.trim(), model: current.minimaxModel,
+        ...current.cloneSettings,
         promptText: values.promptText.trim(), validationText: values.validationText.trim(), languageModel: values.languageModel,
         sourceAudio: await fileToBase64(values.source), sourceFilename: values.source.name,
         sourceContentType: values.source.type || "application/octet-stream", promptAudio: values.prompt ? await fileToBase64(values.prompt) : "",
@@ -240,7 +252,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       const { voice } = await api.createMinimaxVoice(payload);
       const voices = [voice, ...current.minimaxVoices.filter((item) => item.id !== voice.id)];
       writeVoiceClones("minimaxVoiceClones", voices);
-      dispatch({ type: "patch", patch: { minimaxVoices: voices, voice: voice.id, status: `MiniMax voice clone created: ${voice.name}.` } });
+      dispatch({ type: "patch", patch: { minimaxVoices: voices, voice: voice.id, status: `MiniMax voice clone created: ${voice.name}. Use it within 7 days to keep it. First use has a separate $1.50 cloning charge.` } });
     } catch (error) { setStatus(`MiniMax voice clone failed: ${errorMessage(error)}`); }
     finally { dispatch({ type: "patch", patch: { operationBusy: false } }); }
   }, [setStatus]);
@@ -325,7 +337,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     } else if (event.type === "error") {
       stateRef.current = { ...stateRef.current, phase: "error" };
       const stitchedAudio = audioEngineRef.current?.finalize() || null;
-      dispatch({ type: "patch", patch: { phase: "error", segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${event.message || "Narration failed."} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : event.message || "Narration failed." } });
+      dispatch({ type: "patch", patch: { phase: "error", errorDetails: event.details || null, segmentFailure: null, stitchedAudio, audioAvailable: Boolean(stitchedAudio), status: stitchedAudio ? `${event.message || "Narration failed."} Partial ${stitchedAudio.extension.toUpperCase()} is ready.` : event.message || "Narration failed." } });
     }
   }, [refreshBalance, setStatus]);
 
@@ -341,9 +353,19 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       ? current.voiceIdOverrides[current.provider].trim() || current.voice
       : current.voice;
     if ((current.provider === "resemble" || current.provider === "minimax") && !voice.trim()) return setStatus("Select a custom voice or enter a voice ID before starting narration.");
+    if (current.provider === "resemble" || current.provider === "minimax") {
+      const library = current.provider === "resemble" ? current.resembleVoices : current.minimaxVoices;
+      const selected = library.find((item) => item.id === voice);
+      if (!current.voiceIdOverrides[current.provider].trim() && selected?.available === false) return setStatus(selected.unavailableReason || "This voice is unavailable. Refresh the library or enter a voice ID.");
+      try {
+        if (current.provider === "minimax") normalizeMinimaxSettings(current.minimaxSettings, current.minimaxModel);
+        else normalizeResembleSettings(current.resembleSettings);
+      } catch (error) { return setStatus(errorMessage(error)); }
+    }
     writeCredential(current.provider, apiKey, current.rememberCredential[current.provider]);
     const options: NarrationOptions = {
       provider: current.provider, voice, language: current.language, speed: current.speed,
+      ...(current.provider === "minimax" ? { minimax: current.minimaxSettings } : current.provider === "resemble" ? { resemble: current.resembleSettings } : {}),
       segmentChars: current.segmentChars, optimizeStreamingLatency: current.lowLatency, textNormalization: current.textNormalization,
       model: current.provider === "openrouter" ? current.openrouterModel : current.provider === "minimax" ? current.minimaxModel : "",
       geminiPreviousContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiPreviousContext,
@@ -353,7 +375,7 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
     const initialPcm = current.provider === "gemini" || current.provider === "google" || current.provider === "resemble" || (current.provider === "openrouter" && isOpenRouterPcmModel(current.openrouterModel));
     audioEngineRef.current?.reset(initialPcm ? "pcm_s16le" : "mpeg");
     stateRef.current = { ...stateRef.current, phase: "connecting" };
-    dispatch({ type: "patch", patch: { phase: "connecting", status: "Opening local narration stream...", progress: 0, currentSegment: 0, totalSegments: 0, segmentFailure: null, stitchedAudio: null, audioAvailable: false } });
+    dispatch({ type: "patch", patch: { phase: "connecting", errorDetails: null, status: "Opening local narration stream...", progress: 0, currentSegment: 0, totalSegments: 0, segmentFailure: null, stitchedAudio: null, audioAvailable: false } });
     const session = new NarrationSession({
       onOpen: () => setStatus("Narration stream connected."), onEvent: handleServerEvent,
       onAudio: (chunk) => audioEngineRef.current?.push(chunk),
@@ -429,19 +451,34 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
 
   const stats = useMemo(() => {
     const chars = state.text.length;
-    const price = providerConfig.costPerMillionChars;
+    const price = state.provider === "minimax" ? minimaxPrice(state.minimaxModel) : providerConfig.costPerMillionChars;
     const segments = chars ? Math.ceil(chars / Math.max(1, state.segmentChars)) : 0;
     return {
       chars,
       segments,
-      cost: price === undefined ? null : `$${((chars / 1_000_000) * price).toFixed(3)} estimated`
+      cost: price === undefined ? (state.provider === "minimax" ? "Estimate unavailable" : null) : `$${((chars / 1_000_000) * price).toFixed(3)} ${state.provider === "minimax" ? "PAYG estimate" : "estimated"}`
     };
-  }, [providerConfig.costPerMillionChars, state.segmentChars, state.text.length]);
+  }, [providerConfig.costPerMillionChars, state.provider, state.minimaxModel, state.segmentChars, state.text.length]);
 
   return {
     state, providerConfig, voiceOptions, hasVoiceGenderMetadata, stats,
     limits: activeSegmentLimits(state.provider, state.openrouterModel),
     actions: {
+      setMinimaxSettings: (patch: Partial<MinimaxSettings>) => {
+        const minimaxSettings = { ...stateRef.current.minimaxSettings, ...patch };
+        sessionStorage.setItem(STORAGE_KEYS.minimaxSettings, JSON.stringify(minimaxSettings));
+        dispatch({ type: "patch", patch: { minimaxSettings } });
+      },
+      setResembleSettings: (patch: Partial<ResembleSettings>) => {
+        const resembleSettings = { ...stateRef.current.resembleSettings, ...patch };
+        sessionStorage.setItem(STORAGE_KEYS.resembleSettings, JSON.stringify(resembleSettings));
+        dispatch({ type: "patch", patch: { resembleSettings } });
+      },
+      setCloneSettings: (patch: Partial<CloneSettings>) => {
+        const cloneSettings = { ...stateRef.current.cloneSettings, ...patch };
+        sessionStorage.setItem(STORAGE_KEYS.cloneSettings, JSON.stringify(cloneSettings));
+        dispatch({ type: "patch", patch: { cloneSettings } });
+      },
       selectProvider, setGoogleAccessMethod, setCredential, setRememberCredential, selectOpenRouterModel, setMinimaxModel,
       setText: (text: string) => dispatch({ type: "patch", patch: { text } }),
       setVoice: (voice: string) => dispatch({ type: "patch", patch: { voice } }),
@@ -480,10 +517,12 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
   };
 }
 
-function mergeVoices(local: VoiceClone[], remote: VoiceClone[]) {
+export function mergeVoices(local: VoiceClone[], remote: VoiceClone[]) {
   const merged = new Map(local.map((voice) => [voice.id, {
     id: voice.id,
     name: voice.name || voice.id,
+    available: false,
+    ...(voice.createdAt ? { createdAt: voice.createdAt } : {}),
     ...(voice.model ? { model: voice.model } : {})
   }]));
   remote.forEach((voice) => {
@@ -492,6 +531,8 @@ function mergeVoices(local: VoiceClone[], remote: VoiceClone[]) {
     merged.set(voice.id, {
       id: voice.id,
       name: saved?.name || voice.name || voice.id,
+      available: true,
+      ...(saved?.createdAt || voice.createdAt ? { createdAt: saved?.createdAt || voice.createdAt } : {}),
       ...(model ? { model } : {})
     });
   });

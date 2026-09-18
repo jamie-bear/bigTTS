@@ -1,4 +1,6 @@
 import type { ProviderConfig, ProviderId, SelectOption } from "../types/contracts";
+import { MINIMAX_LANGUAGES as minimaxLanguages, MINIMAX_MAX_CHARS, RESEMBLE_MAX_CHARS } from "../../shared/speechSettings.js";
+export { MINIMAX_MODELS } from "../../shared/speechSettings.js";
 
 export const OPENROUTER_GEMINI_31_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
 
@@ -38,14 +40,7 @@ const xaiLanguages = optionList([
   ["bn", "Bengali"], ["ar-EG", "Arabic (Egypt)"], ["ar-SA", "Arabic (Saudi Arabia)"], ["ar-AE", "Arabic (UAE)"]
 ]);
 
-export const MINIMAX_LANGUAGES = optionList([
-  ["auto", "Auto"], ["English", "English"], ["Chinese", "Chinese"], ["Chinese,Yue", "Chinese (Cantonese)"],
-  ["Spanish", "Spanish"], ["French", "French"], ["Portuguese", "Portuguese"], ["German", "German"],
-  ["Arabic", "Arabic"], ["Russian", "Russian"], ["Japanese", "Japanese"], ["Italian", "Italian"],
-  ["Korean", "Korean"], ["Hindi", "Hindi"], ["Turkish", "Turkish"], ["Dutch", "Dutch"],
-  ["Ukrainian", "Ukrainian"], ["Vietnamese", "Vietnamese"], ["Indonesian", "Indonesian"], ["Thai", "Thai"],
-  ["Polish", "Polish"], ["Romanian", "Romanian"], ["Greek", "Greek"], ["Czech", "Czech"], ["Finnish", "Finnish"]
-]);
+export const MINIMAX_LANGUAGES = minimaxLanguages.map((value) => ({ value, label: value === "auto" ? "Auto" : value === "Chinese,Yue" ? "Chinese (Cantonese)" : value }));
 
 const providers: ProviderConfig[] = [
   {
@@ -57,8 +52,8 @@ const providers: ProviderConfig[] = [
   {
     id: "minimax", label: "MiniMax: Custom Voices", storageKey: "minimaxApiKey",
     credentialLabel: "MiniMax API key", credentialPlaceholder: "MiniMax API key", authMode: "api-key",
-    defaultVoice: "", defaultLanguage: "auto", defaultSegmentChars: 2500, maxSegmentChars: 10000, supportsSpeed: true,
-    costPerMillionChars: 30, voices: [{ value: "", label: "Create or refresh MiniMax custom voices" }], languages: MINIMAX_LANGUAGES.slice(0, 14)
+    defaultVoice: "", defaultLanguage: "auto", defaultSegmentChars: 2500, maxSegmentChars: MINIMAX_MAX_CHARS, supportsSpeed: true, supportsTextNormalization: true,
+    voices: [{ value: "", label: "Create or refresh MiniMax custom voices" }], languages: MINIMAX_LANGUAGES
   },
   {
     id: "xai", label: "xAI: Grok TTS 1.0", storageKey: "xaiApiKey", credentialLabel: "xAI API key",
@@ -88,7 +83,7 @@ const providers: ProviderConfig[] = [
   {
     id: "resemble", label: "Resemble.ai: Custom Voices", storageKey: "resembleApiKey",
     credentialLabel: "Resemble.ai API key", credentialPlaceholder: "Bearer token", authMode: "api-key",
-    defaultVoice: "", defaultLanguage: "auto", defaultSegmentChars: 2500, maxSegmentChars: 12000, supportsSpeed: false,
+    defaultVoice: "", defaultLanguage: "auto", defaultSegmentChars: 2500, maxSegmentChars: RESEMBLE_MAX_CHARS, supportsSpeed: false,
     voices: [{ value: "", label: "Enter a Resemble.ai API key to load custom voices" }], languages: autoOnly
   }
 ];
@@ -98,7 +93,6 @@ export const PROVIDER_ORDER = providers.map(({ id }) => id).filter((id) => id !=
 export const isGoogleProvider = (provider: ProviderId) => provider === "gemini" || provider === "google";
 export const PROVIDERS = Object.fromEntries(providers.map((provider) => [provider.id, provider])) as Record<ProviderId, ProviderConfig>;
 export const SEGMENT_OPTIONS = optionList([["500", "Very short"], ["1200", "Short"], ["2500", "Balanced"], ["4500", "Long"], ["8000", "Very long"], ["12000", "Maximum"]]);
-export const MINIMAX_MODELS = ["speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"];
 
 export const isProviderId = (value: string | null): value is ProviderId => Boolean(value && value in PROVIDERS);
 export const isOpenRouterPcmModel = (modelId: string) => /(^|[/:-])(?:google|gemini)(?:[/:-]|$)/i.test(modelId);

@@ -15,6 +15,8 @@ import {
   sanitizeNarratorDirection
 } from "./server/geminiContinuity.js";
 import { openRouterErrorDetails, requestOpenRouterSpeech } from "./server/openRouterSpeech.js";
+import { MINIMAX_MODELS, MINIMAX_LANGUAGES, MINIMAX_MAX_CHARS, RESEMBLE_MAX_CHARS, minimaxLanguageSupported, normalizeMinimaxSettings, normalizeResembleSettings, normalizeCloneSettings } from "./shared/speechSettings.js";
+import { withProviderTimeout, providerError, parseMiniMaxJson, stringifyMiniMaxPayload, miniMaxFileId, validateCloneAudio, decodeMiniMaxAudio, decodeResembleWav, buildResembleData, splitResembleText } from "./server/providerContracts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -402,6 +404,7 @@ async function handleMinimaxVoices(req, res, pathname) {
   try {
     if (pathname === "/api/minimax/voices") {
       const parsed = await requestMiniMaxJson(MINIMAX_GET_VOICE_URL, { apiKey, method: "POST", payload: { voice_type: "voice_cloning" } });
+      if (!Array.isArray(parsed.voice_cloning)) throw providerError("MiniMax", { status: 200 }, { trace_id: parsed.trace_id }, "Voice list response is incomplete; saved voices have not been updated.");
       sendJson(res, 200, { voices: normalizeMiniMaxVoices(parsed?.voice_cloning) });
       return;
     }
@@ -424,7 +427,7 @@ async function handleMinimaxVoices(req, res, pathname) {
 
     sendJson(res, 404, { error: "Unknown MiniMax voice endpoint." });
   } catch (error) {
-    sendJson(res, 502, { error: `MiniMax voice request failed: ${error.message}` });
+    sendJson(res, 502, { error: `MiniMax voice request failed: ${error.message}`, details: error.details });
   }
 }
 
@@ -450,6 +453,10 @@ async function createMinimaxVoiceClone(res, body, apiKey) {
     if (Boolean(promptAudio) !== Boolean(promptText)) {
       throw new Error("MiniMax prompt audio and prompt text must be provided together.");
     }
+    // Validate both recordings before uploading either one.
+    validateCloneAudio(sourceAudio, body.sourceFilename);
+    if (promptAudio) validateCloneAudio(promptAudio, body.promptFilename);
+    const cloneSettings = normalizeCloneSettings(body);
     const sourceFileId = await uploadMiniMaxAudio(apiKey, {
       purpose: "voice_clone",
       audio: sourceAudio,
@@ -474,7 +481,8 @@ async function createMinimaxVoiceClone(res, body, apiKey) {
       languageModel,
       validationText: body.validationText,
       promptFileId,
-      promptText
+      promptText,
+      ...cloneSettings
     });
 
     await requestMiniMaxJson(MINIMAX_VOICE_CLONE_URL, { apiKey, method: "POST", payload, timeoutMs: MINIMAX_REQUEST_TIMEOUT_MS });
@@ -482,72 +490,83 @@ async function createMinimaxVoiceClone(res, body, apiKey) {
       voice: {
         id: voiceId,
         name,
-        model: speechModel
+        model: speechModel,
+        available: true,
+        createdAt: new Date().toISOString()
       }
     });
   } catch (error) {
-    sendJson(res, 502, { error: `MiniMax voice clone failed: ${error.message}` });
+    sendJson(res, 502, { error: `MiniMax voice clone failed: ${error.message}`, details: error.details });
   }
 }
 
-export function buildMiniMaxVoiceClonePayload({ sourceFileId, voiceId, languageModel = "", validationText = "", promptFileId = "", promptText = "" }) {
+export function buildMiniMaxVoiceClonePayload({ sourceFileId, voiceId, languageModel = "", validationText = "", promptFileId = "", promptText = "", ...settings }) {
   const normalizedPromptText = String(promptText || "").trim();
   if (Boolean(promptFileId) !== Boolean(normalizedPromptText)) {
     throw new Error("MiniMax prompt audio and prompt text must be provided together.");
   }
+  const clone = normalizeCloneSettings(settings);
   const payload = {
-    file_id: Number(sourceFileId) || sourceFileId,
+    file_id: miniMaxFileId(sourceFileId),
     voice_id: voiceId,
-    need_noise_reduction: true,
-    need_volume_normalization: true
+    need_noise_reduction: clone.noiseReduction,
+    need_volume_normalization: clone.volumeNormalization
   };
   if (languageModel) payload.language_boost = languageModel;
   const transcript = String(validationText || "").trim().slice(0, 200);
-  if (transcript) payload.text_validation = transcript;
+  if (transcript) { payload.text_validation = transcript; payload.accuracy = clone.accuracy; }
   if (promptFileId) {
     payload.clone_prompt = {
-      prompt_audio: Number(promptFileId) || promptFileId,
+      prompt_audio: miniMaxFileId(promptFileId),
       prompt_text: normalizedPromptText.slice(0, 1000)
     };
   }
   return payload;
 }
 
-async function uploadMiniMaxAudio(apiKey, { purpose, audio, filename, contentType }) {
+export async function uploadMiniMaxAudio(apiKey, { purpose, audio, filename }) {
+  const validated = validateCloneAudio(audio, filename);
   const form = new FormData();
   form.append("purpose", purpose);
-  form.append("file", new Blob([Buffer.from(audio, "base64")], { type: contentType || "application/octet-stream" }), filename || "audio.wav");
-  const response = await fetch(MINIMAX_FILE_UPLOAD_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-    signal: AbortSignal.timeout(MINIMAX_REQUEST_TIMEOUT_MS)
+  form.append("file", new Blob([validated.audio], { type: validated.contentType }), filename);
+  return withProviderTimeout(async (signal) => {
+    const response = await fetch(MINIMAX_FILE_UPLOAD_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal
+    });
+    const text = await response.text();
+    const parsed = parseMiniMaxJson(text);
+    checkMiniMaxResponse(response, parsed, text);
+    const fileId = parsed?.file?.file_id || parsed?.file_id || parsed?.data?.file_id;
+    if (!fileId) throw providerError("MiniMax", response, { trace_id: parsed.trace_id }, "Upload response did not include a file_id.");
+    return String(miniMaxFileId(fileId));
   });
-  const text = await response.text().catch(() => "");
-  const parsed = parseJsonText(text);
-  if (!response.ok) throw new Error(parsed?.error?.message || parsed?.message || summarizeNonJsonResponse(text, response));
-  const fileId = parsed?.file?.file_id || parsed?.file_id || parsed?.data?.file_id;
-  if (!fileId) throw new Error("MiniMax upload response did not include a file_id.");
-  return String(fileId);
 }
 
-async function requestMiniMaxJson(url, { apiKey, method = "GET", payload = null, signal = undefined, timeoutMs = MINIMAX_REQUEST_TIMEOUT_MS }) {
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json; charset=utf-8"
-    },
-    body: payload ? JSON.stringify(payload) : undefined,
-    signal: signal || AbortSignal.timeout(timeoutMs)
-  });
-  const text = await response.text().catch(() => "");
-  const parsed = parseJsonText(text);
-  if (!response.ok) throw new Error(parsed?.base_resp?.status_msg || parsed?.error?.message || parsed?.message || summarizeNonJsonResponse(text, response));
-  if (!parsed) throw new Error(`MiniMax returned ${describeContentType(response)} instead of JSON.`);
-  const statusCode = parsed?.base_resp?.status_code;
-  if (Number.isFinite(Number(statusCode)) && Number(statusCode) !== 0) throw new Error(parsed?.base_resp?.status_msg || `MiniMax status ${statusCode}`);
-  return parsed;
+export async function requestMiniMaxJson(url, { apiKey, method = "GET", payload = null, signal = undefined, timeoutMs = MINIMAX_REQUEST_TIMEOUT_MS }) {
+  return withProviderTimeout(async (requestSignal) => {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      body: payload ? stringifyMiniMaxPayload(payload) : undefined,
+      signal: requestSignal
+    });
+    const text = await response.text();
+    const parsed = parseMiniMaxJson(text);
+    checkMiniMaxResponse(response, parsed, text);
+    return parsed;
+  }, signal, timeoutMs);
+}
+
+function checkMiniMaxResponse(response, parsed, text) {
+  if (!response.ok || !parsed || parsed.error || parsed.base_resp?.status_code === undefined || Number(parsed.base_resp.status_code) !== 0) {
+    throw providerError("MiniMax", response, parsed, parsed ? "Invalid provider status." : summarizeNonJsonResponse(text, response));
+  }
 }
 
 function createMiniMaxVoiceId(name) {
@@ -557,22 +576,13 @@ function createMiniMaxVoiceId(name) {
 
 function sanitizeMiniMaxModel(value) {
   const model = String(value || "speech-2.8-hd").trim();
-  return ["speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"].includes(model) ? model : "speech-2.8-hd";
+  return MINIMAX_MODELS.includes(model) ? model : "speech-2.8-hd";
 }
 
 function sanitizeMiniMaxCloneLanguageModel(value) {
   const model = String(value || "auto").trim();
   if (model === "auto") return "auto";
-  const allowed = new Set([
-    "Chinese", "Chinese,Yue", "English", "Arabic", "Russian", "Spanish", "French",
-    "Portuguese", "German", "Turkish", "Dutch", "Ukrainian", "Vietnamese",
-    "Indonesian", "Japanese", "Italian", "Korean", "Thai", "Polish", "Romanian",
-    "Greek", "Czech", "Finnish", "Hindi", "Bulgarian", "Danish", "Hebrew",
-    "Malay", "Persian", "Slovak", "Swedish", "Croatian", "Filipino",
-    "Hungarian", "Norwegian", "Slovenian", "Catalan", "Nynorsk", "Tamil",
-    "Afrikaans"
-  ]);
-  return allowed.has(model) ? model : "auto";
+  return MINIMAX_LANGUAGES.includes(model) ? model : "auto";
 }
 
 async function handleResembleVoices(req, res) {
@@ -597,55 +607,66 @@ async function handleResembleVoices(req, res) {
   }
 
   try {
-    const voices = await listResembleCustomVoices(apiKey);
-    sendJson(res, 200, { voices });
+    const result = await listResembleCustomVoices(apiKey);
+    sendJson(res, 200, result);
   } catch (error) {
-    sendJson(res, 502, { error: `Resemble.ai voice discovery failed: ${error.message}` });
+    sendJson(res, 502, { error: `Resemble.ai voice discovery failed: ${error.message}`, details: error.details });
   }
 }
 
-async function listResembleCustomVoices(apiKey) {
-  const voices = [];
+export async function listResembleCustomVoices(apiKey) {
+  const voices = new Map();
   const pageSize = 100;
+  let incomplete = false;
   for (let page = 1; page <= 20; page += 1) {
     const url = new URL(RESEMBLE_API_VOICES_URL);
     url.searchParams.set("page", String(page));
     url.searchParams.set("page_size", String(pageSize));
     url.searchParams.set("pre_built_resemble_voice", "false");
+    url.searchParams.set("advanced", "true");
 
-    const response = await fetch(url, {
-      headers: { Authorization: normalizeBearerToken(apiKey) }
+    const parsed = await withProviderTimeout(async (signal) => {
+      const response = await fetch(url, {
+        headers: { Authorization: normalizeBearerToken(apiKey) }, signal
+      });
+      const text = await response.text();
+      const parsed = parseJsonText(text);
+      if (!response.ok || parsed?.success === false || parsed?.error) {
+        throw providerError("Resemble.ai", response, parsed, summarizeNonJsonResponse(text, response));
+      }
+      if (!parsed) throw new Error(`Resemble.ai returned ${describeContentType(response)} instead of JSON.`);
+
+      return parsed;
     });
-    const text = await response.text().catch(() => "");
-    const parsed = parseJsonText(text);
-    if (!response.ok) {
-      throw new Error(parsed?.error || parsed?.message || summarizeNonJsonResponse(text, response));
-    }
-    if (!parsed) throw new Error(`Resemble.ai returned ${describeContentType(response)} instead of JSON.`);
-
-    voices.push(...normalizeResembleVoices(parsed));
-    const pageCount = Number(parsed.page_count || parsed.total_pages || page);
-    if (!Number.isFinite(pageCount) || page >= pageCount) break;
+    for (const voice of normalizeResembleVoices(parsed)) voices.set(voice.id, voice);
+    const pageCount = Number(parsed.num_pages ?? parsed.page_count ?? parsed.total_pages);
+    const items = Array.isArray(parsed.items) ? parsed.items : Array.isArray(parsed.voices) ? parsed.voices : [];
+    const more = Number.isFinite(pageCount) ? page < pageCount : items.length >= pageSize;
+    if (!more) break;
+    if (page === 20) incomplete = true;
   }
-  return voices;
+  return { voices: [...voices.values()], ...(incomplete ? { warning: "Voice discovery stopped after 20 pages; the list is incomplete. You can enter a voice ID directly." } : {}) };
 }
 
-function normalizeResembleVoices(parsed) {
+export function normalizeResembleVoices(parsed) {
   const items = Array.isArray(parsed?.items) ? parsed.items : Array.isArray(parsed?.voices) ? parsed.voices : Array.isArray(parsed) ? parsed : [];
   return items
     .filter((voice) => !voice?.pre_built_resemble_voice && String(voice?.source || "").toLowerCase() !== "marketplace")
-    .filter((voice) => {
-      const status = String(voice?.voice_status || voice?.status || "").toLowerCase();
-      return !status || status === "ready";
+    .map((voice) => {
+      const status = String(voice?.component_status?.text_to_speech?.status || voice?.voice_status || voice?.status || "").toLowerCase();
+      const model = [voice?.model_version, voice?.model, voice?.text_to_speech?.model_version, voice?.component_status?.text_to_speech?.model_version].find((value) => typeof value === "string") || "";
+      const legacy = /^(tts-v[1-4](?:-turbo)?|tts-legacy)$/.test(model);
+      const available = !legacy && (!status || status === "ready") && voice?.api_support?.sync_tts !== false;
+      return {
+        id: String(voice?.uuid || voice?.id || ""),
+        name: String(voice?.name || voice?.uuid || voice?.id || ""),
+        language: String(voice?.default_language || ""),
+        languages: Array.isArray(voice?.supported_languages) ? voice.supported_languages.map(String) : [],
+        gender: String(voice?.gender || "").trim(),
+        model, status, available,
+        ...(legacy ? { unavailableReason: "Upgrade this voice to Resemble Ultra on the Resemble Voices page." } : !available ? { unavailableReason: "This voice is not ready for synchronous speech." } : {})
+      };
     })
-    .filter((voice) => voice?.api_support?.sync_tts !== false)
-    .map((voice) => ({
-      id: String(voice?.uuid || voice?.id || ""),
-      name: String(voice?.name || voice?.uuid || voice?.id || ""),
-      language: String(voice?.default_language || ""),
-      languages: Array.isArray(voice?.supported_languages) ? voice.supported_languages.map(String) : [],
-      gender: String(voice?.gender || "").trim()
-    }))
     .filter((voice) => voice.id);
 }
 
@@ -1051,7 +1072,9 @@ export function createNarrationSession(client) {
     state.waitingForAudioDone = false;
     state.segments = options.provider === "openrouter" && isOpenRouterGemini31Model(options.model)
       ? createGeminiNarrationSegments(text, { targetChars: options.segmentChars })
-      : splitText(text, options.segmentChars, options.maxSegmentBytes).map((segmentText, index, segments) => ({
+      : splitText(text, options.segmentChars, options.maxSegmentBytes)
+        .flatMap((segment) => options.provider === "resemble" ? splitResembleText(segment, options.segmentChars, options.resemble) : [segment])
+        .map((segmentText, index, segments) => ({
           text: segmentText,
           previousContext: "",
           nextContext: "",
@@ -1393,7 +1416,7 @@ export function createNarrationSession(client) {
     state.paused = false;
     state.recoverableError = null;
     closeUpstream();
-    sendJsonWs(client, { type: "error", message: error.message || String(error) });
+    sendJsonWs(client, { type: "error", message: error.message || String(error), details: error.details });
   }
 
   function closeUpstream() {
@@ -1413,7 +1436,7 @@ export function createNarrationSession(client) {
   }
 }
 
-function sanitizeOptions(raw) {
+export function sanitizeOptions(raw) {
   const provider = sanitizeProvider(raw.provider);
   const defaultVoice = provider === "google"
     ? "Enceladus"
@@ -1428,15 +1451,20 @@ function sanitizeOptions(raw) {
             : "eve";
   const voice = sanitizeVoice(raw.voice, defaultVoice, provider);
   const language = sanitizeLanguage(raw.language, provider);
-  const speed = clamp(Number(raw.speed || 1), 0.7, 1.5);
+  const speed = clamp(Number(raw.speed || 1), provider === "minimax" ? 0.5 : 0.7, provider === "minimax" ? 2 : 1.5);
+  if (!Number.isFinite(speed)) throw new Error("Reading speed must be a number.");
   const optimizeStreamingLatency = raw.optimizeStreamingLatency ? 1 : 0;
   const textNormalization = provider === "xai" && Boolean(raw.textNormalization);
   const model = provider === "openrouter" ? String(raw.model || "").trim() : provider === "minimax" ? sanitizeMiniMaxModel(raw.model) : "";
+  if (provider === "minimax" && !minimaxLanguageSupported(language, model)) throw new Error(`Language ${language} is not supported by ${model}.`);
+  const minimax = provider === "minimax" ? normalizeMinimaxSettings(raw.minimax, model) : undefined;
+  const resemble = provider === "resemble" ? normalizeResembleSettings(raw.resemble) : undefined;
   const gemini31OpenRouter = provider === "openrouter" && isOpenRouterGemini31Model(model);
   const legacyGeminiContinuity = raw.geminiContinuity !== false;
   const defaultSegmentChars = getDefaultSegmentChars(provider, model);
   const maxSegmentChars = getMaxSegmentChars(provider, model);
   const segmentChars = Math.round(clamp(Number(raw.segmentChars || defaultSegmentChars), MIN_SEGMENT_CHARS, maxSegmentChars));
+  if (!Number.isFinite(segmentChars)) throw new Error("Segment size must be a number.");
   if (provider === "openrouter" && !model) {
     throw new Error("Select an OpenRouter speech model before starting narration.");
   }
@@ -1449,6 +1477,8 @@ function sanitizeOptions(raw) {
 
   return {
     provider,
+    minimax,
+    resemble,
     model,
     voice,
     language: language || "auto",
@@ -1481,6 +1511,8 @@ function getDefaultSegmentChars(provider, model = "") {
 }
 
 function getMaxSegmentChars(provider, model = "") {
+  if (provider === "minimax") return MINIMAX_MAX_CHARS;
+  if (provider === "resemble") return RESEMBLE_MAX_CHARS;
   if (provider === "google") return GOOGLE_MAX_SEGMENT_CHARS;
   if (provider === "openrouter" && isOpenRouterGemini31Model(model)) return GEMINI_31_MAX_SEGMENT_CHARS;
   return MAX_SEGMENT_CHARS;
@@ -1559,9 +1591,11 @@ function buildXaiUrl(options) {
 }
 
 
-async function synthesizeMiniMaxSpeech(text, options, apiKey, signal) {
+export async function synthesizeMiniMaxSpeech(text, options, apiKey, signal) {
   const trimmedApiKey = String(apiKey || "").trim();
   if (!trimmedApiKey) throw new Error("Add your MiniMax API key before starting narration.");
+  if (text.length > MINIMAX_MAX_CHARS) throw new Error("MiniMax segment exceeds 9,999 characters.");
+  const settings = normalizeMinimaxSettings(options.minimax, options.model);
   const parsed = await requestMiniMaxJson(MINIMAX_TTS_URL, {
     apiKey: trimmedApiKey,
     method: "POST",
@@ -1574,9 +1608,12 @@ async function synthesizeMiniMaxSpeech(text, options, apiKey, signal) {
       voice_setting: {
         voice_id: options.voice,
         speed: options.speed,
-        vol: 1,
-        pitch: 0
+        vol: settings.volume,
+        pitch: settings.pitch,
+        text_normalization: settings.textNormalization,
+        ...(settings.emotion ? { emotion: settings.emotion } : {})
       },
+      ...(settings.pronunciation ? { pronunciation_dict: { tone: settings.pronunciation.split(/\r?\n/).map((rule) => rule.trim()).filter(Boolean) } } : {}),
       audio_setting: {
         sample_rate: MINIMAX_SAMPLE_RATE,
         bitrate: 128000,
@@ -1586,48 +1623,48 @@ async function synthesizeMiniMaxSpeech(text, options, apiKey, signal) {
     },
     signal
   });
-  const audio = parsed?.data?.audio || parsed?.audio;
-  if (!audio) throw new Error("MiniMax response did not include audio content.");
-  return /^[0-9a-f]+$/i.test(audio) ? Buffer.from(audio, "hex") : Buffer.from(String(audio), "base64");
+  if (parsed?.data?.status !== 2) throw providerError("MiniMax", { status: 200 }, { trace_id: parsed.trace_id }, "Synthesis did not complete.");
+  try { return decodeMiniMaxAudio(parsed?.data?.audio); }
+  catch (error) { throw providerError("MiniMax", { status: 200 }, { trace_id: parsed.trace_id }, error.message); }
 }
 
-async function synthesizeResembleSpeech(text, options, apiKey, signal) {
+export async function synthesizeResembleSpeech(text, options, apiKey, signal) {
   const trimmedApiKey = String(apiKey || "").trim();
   if (!trimmedApiKey) {
     throw new Error("Add your Resemble.ai API key before starting narration.");
   }
 
-  const response = await fetch(RESEMBLE_SYNTHESIS_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      Authorization: normalizeBearerToken(trimmedApiKey)
-    },
-    body: JSON.stringify({
-      voice_uuid: options.voice,
-      data: text,
-      sample_rate: RESEMBLE_SAMPLE_RATE,
-      precision: "PCM_16",
-      output_format: "wav"
-    }),
-    signal
-  });
+  const settings = normalizeResembleSettings(options.resemble);
+  const data = buildResembleData(text, settings);
+  if (data.length > RESEMBLE_MAX_CHARS) throw new Error("Resemble segment exceeds 3,000 characters including SSML.");
+  return withProviderTimeout(async (requestSignal) => {
+    const response = await fetch(RESEMBLE_SYNTHESIS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        Authorization: normalizeBearerToken(trimmedApiKey)
+      },
+      body: JSON.stringify({
+        voice_uuid: options.voice,
+        data,
+        use_hd: settings.hd,
+        apply_custom_pronunciations: settings.customPronunciations,
+        sample_rate: RESEMBLE_SAMPLE_RATE,
+        precision: "PCM_16",
+        output_format: "wav"
+      }),
+      signal: requestSignal
+    });
 
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
+    const body = parseJsonText(await response.text());
 
-  if (!response.ok) {
-    throw new Error(`Resemble.ai TTS request failed: ${body?.error || body?.message || `${response.status} ${response.statusText}`}`);
-  }
-  if (!body?.audio_content) {
-    throw new Error("Resemble.ai response did not include audio content.");
-  }
+    if (!response.ok || body?.success === false || body?.error) {
+      throw providerError("Resemble.ai", response, body, `${response.status} ${response.statusText}`);
+    }
 
-  return extractLinear16Pcm(Buffer.from(body.audio_content, "base64"));
+    try { return decodeResembleWav(body?.audio_content, RESEMBLE_SAMPLE_RATE); }
+    catch (error) { throw providerError("Resemble.ai", response, { trace_id: body?.trace_id }, error.message); }
+  }, signal);
 }
 
 async function synthesizeOpenRouterSpeech(segment, options, apiKey, signal) {
@@ -1951,6 +1988,8 @@ function splitOversizedUnit(text, targetLength, maxBytes = Number.POSITIVE_INFIN
     if (cutAt < Math.floor(targetLength * 0.6)) {
       cutAt = limit;
     }
+    // Do not split a UTF-16 surrogate pair at the request boundary.
+    if (cutAt > 0 && /[\uD800-\uDBFF]/.test(rest[cutAt - 1]) && /[\uDC00-\uDFFF]/.test(rest[cutAt] || "")) cutAt -= 1;
 
     pieces.push(rest.slice(0, cutAt).trim());
     rest = rest.slice(cutAt).trim();

@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import App from "../../src/client/App";
 import { useBigTtsController } from "../../src/client/hooks/useBigTtsController";
 import { NarrationSession } from "../../src/client/services/narrationSession";
+import * as cloneAudio from "../../src/client/services/cloneAudio";
 
 const providers = ["resemble", "minimax"] as const;
 const voices = [{ id: "Library-One", name: "First narrator" }, { id: "Library-Two", name: "Second narrator" }];
@@ -109,6 +110,7 @@ describe("voice ID overrides", () => {
   });
 
   it("keeps MiniMax refresh, rename, delete, and creation tied to the library without replacing the override", async () => {
+    vi.spyOn(cloneAudio, "validateCloneFile").mockResolvedValue();
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith("/voices/create")) return json({ voice: { id: "New-Clone", name: "New narrator" } });

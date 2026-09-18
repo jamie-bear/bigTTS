@@ -148,6 +148,7 @@
 }
 
 .field-label,
+.provider-synthesis-settings .field > span,
 .voice-clone-form label > span,
 .provider-model-panel > label {
   color: var(--color-text);
@@ -170,8 +171,10 @@
 
 input[type="text"],
 input[type="password"],
+input[type="number"],
 input[type="file"],
-select {
+select,
+.provider-synthesis-settings textarea {
   width: 100%;
   min-height: 40px;
   padding: 0 var(--space-3);
@@ -187,6 +190,8 @@ select {
 
 input[type="text"]:hover:not(:disabled),
 input[type="password"]:hover:not(:disabled),
+input[type="number"]:hover:not(:disabled),
+.provider-synthesis-settings textarea:hover:not(:disabled),
 select:hover:not(:disabled) { border-color: var(--color-border-strong); }
 
 input[type="file"] {
@@ -388,6 +393,13 @@ input[type="range"]::-moz-range-thumb {
 .slider-field small { color: var(--color-text-muted); }
 
 .slider-field.is-unavailable { background: var(--color-surface-muted); }
+
+.provider-synthesis-settings { display: grid; gap: var(--space-3); min-width: 0; }
+.provider-synthesis-settings .field { display: grid; gap: var(--space-2); min-width: 0; }
+.provider-synthesis-settings textarea { width: 100%; min-height: 80px; padding: var(--space-3); resize: vertical; }
+.provider-synthesis-settings small { color: var(--color-text-muted); }
+.provider-synthesis-settings em { color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; font-weight: var(--weight-medium); }
+.field-grid:has(> .field:only-child) { grid-template-columns: minmax(0, 1fr); }
 
 @media (max-width: 600px) {
   .field-grid { grid-template-columns: minmax(0, 1fr); }

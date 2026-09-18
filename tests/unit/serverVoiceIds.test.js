@@ -6,8 +6,8 @@ describe("provider voice IDs", () => {
 
   it.each(["resemble", "minimax"])("forwards an unlisted %s voice ID to synthesis with its casing intact", async (provider) => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(provider === "resemble"
-      ? { audio_content: "AQIDBA==" }
-      : { data: { audio: "01020304" }, base_resp: { status_code: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      ? { success: true, audio_content: validWav().toString("base64") }
+      : { data: { audio: "01020304", status: 2 }, base_resp: { status_code: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     const events = [];
     const session = createNarrationSession({ readyState: 1, send: (value) => { if (!Buffer.isBuffer(value)) events.push(JSON.parse(value)); } });
@@ -37,3 +37,12 @@ describe("provider voice IDs", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+function validWav() {
+  const audio = Buffer.alloc(48);
+  audio.write("RIFF"); audio.writeUInt32LE(40, 4); audio.write("WAVEfmt ", 8);
+  audio.writeUInt32LE(16, 16); audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22);
+  audio.writeUInt32LE(22050, 24); audio.writeUInt32LE(44100, 28); audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34);
+  audio.write("data", 36); audio.writeUInt32LE(4, 40);
+  return audio;
+}
