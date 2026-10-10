@@ -30,4 +30,9 @@ describe("provider registry", () => {
     expect(knownModelVoiceGender("google/gemini-tts", "Kore")).toBe("female");
     expect(knownModelVoiceGender("x-ai/grok-tts", "sal")).toBe("neutral");
   });
+
+  it.each(["google/gemini-3.1-flash-tts-preview", "google/gemini-3.8-flash-tts", "google/gemini-3.8-flash-lite-tts"])("applies shared semantic limits to %s", (model) => {
+    expect(activeSegmentLimits("openrouter", model)).toEqual({ defaultSegmentChars: 500, maxSegmentChars: 2500 });
+    expect(activeSegmentLimits("xai", model)).toEqual({ defaultSegmentChars: 2500, maxSegmentChars: 12000 });
+  });
 });

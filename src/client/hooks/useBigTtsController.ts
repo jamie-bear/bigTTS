@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { activeSegmentLimits, isGoogleProvider, isOpenRouterGemini31Model, isOpenRouterGeminiModel, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
+import { activeSegmentLimits, isGoogleProvider, getOpenRouterGeminiCapabilities, isOpenRouterGeminiModel, isOpenRouterPcmModel, knownModelVoiceGender, PROVIDERS, sortVoiceOptions, voiceGenderLabel } from "../config/providers";
 import { api, fileToBase64 } from "../services/apiClient";
 import { AudioEngine } from "../services/audioEngine";
 import { NarrationSession } from "../services/narrationSession";
@@ -382,9 +382,9 @@ export function useBigTtsController(audioRef: React.RefObject<HTMLAudioElement |
       ...(current.provider === "minimax" ? { minimax: current.minimaxSettings } : current.provider === "resemble" ? { resemble: current.resembleSettings } : {}),
       segmentChars: current.segmentChars, optimizeStreamingLatency: current.lowLatency, textNormalization: current.textNormalization,
       model: current.provider === "openrouter" ? current.openrouterModel : current.provider === "minimax" ? current.minimaxModel : "",
-      geminiPreviousContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiPreviousContext,
-      geminiFollowingContext: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) && current.geminiFollowingContext,
-      geminiNarratorDirection: current.provider === "openrouter" && isOpenRouterGemini31Model(current.openrouterModel) ? current.geminiNarratorDirection : "",
+      geminiPreviousContext: current.provider === "openrouter" && Boolean(getOpenRouterGeminiCapabilities(current.openrouterModel)?.neighboringContext) && current.geminiPreviousContext,
+      geminiFollowingContext: current.provider === "openrouter" && Boolean(getOpenRouterGeminiCapabilities(current.openrouterModel)?.neighboringContext) && current.geminiFollowingContext,
+      geminiNarratorDirection: current.provider === "openrouter" && getOpenRouterGeminiCapabilities(current.openrouterModel)?.narratorDirection ? current.geminiNarratorDirection : "",
       autoSmartRetry: current.provider === "openrouter" && isOpenRouterGeminiModel(current.openrouterModel) && current.autoSmartRetry
     };
     const initialPcm = current.provider === "gemini" || current.provider === "google" || current.provider === "resemble" || (current.provider === "openrouter" && isOpenRouterPcmModel(current.openrouterModel));

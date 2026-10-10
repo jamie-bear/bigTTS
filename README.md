@@ -10,7 +10,7 @@ The frontend uses React, TypeScript, and Vite. Provider configuration, persisten
 - Pick OpenRouter, MiniMax, xAI, Gemini API, Google Cloud TTS, or Resemble.ai at runtime.
 - Keep provider credentials local. OpenRouter, xAI, Resemble.ai, and Gemini API keys stay in the active browser/backend session; Google OAuth stores a refresh token in the ignored `.secrets` folder.
 - Streams or buffers audio through a backend WebSocket proxy so provider credentials are not exposed in frontend source.
-- Splits long text by paragraph and sentence, using a continuity-aware multilingual segmenter for OpenRouter Gemini 3.1 while keeping xAI segments below the `text.delta` limit and Google segments below Cloud TTS request-size limits.
+- Splits long text by paragraph and sentence, using a continuity-aware multilingual segmenter for OpenRouter Gemini 3.1 and 3.8 TTS while keeping xAI segments below the `text.delta` limit and Google segments below Cloud TTS request-size limits.
 - Generates every segment sequentially after narration starts, independent of playback position, while still streaming audio for listening.
 - Expands the player into a cumulative seekable timeline after each completed segment, preserving the listener's position as more audio arrives and staging source updates so active playback is never interrupted.
 - Pauses generation safely after the in-flight segment finishes and resumes with the next segment, without pausing audio playback.
@@ -80,13 +80,13 @@ npm run test:e2e
 npm run build
 ```
 
-An optional, credential-gated listening evaluation compares the former 500-character behavior with the continuity pipeline. It writes ignored WAV files and a generation manifest under `artifacts/gemini-continuity/`:
+An optional, credential-gated listening evaluation compares the former 500-character behavior with the 3.1 continuity pipeline, or plain versus styled narration on identical semantic segments for either 3.8 model. It writes ignored WAV files and a generation manifest under `artifacts/gemini-continuity/`:
 
 ```bash
 OPENROUTER_API_KEY=your-key npm run evaluate:gemini-continuity
 ```
 
-Set `GEMINI_TTS_VOICE` or `GEMINI_TTS_SPEED` to override the default `Kore` voice and `1.0` pace for the evaluation.
+Set `GEMINI_TTS_MODEL` to `google/gemini-3.8-flash-tts` or `google/gemini-3.8-flash-lite-tts` (default: `google/gemini-3.1-flash-tts-preview`). `GEMINI_TTS_VOICE`, `GEMINI_TTS_SPEED`, and `GEMINI_TTS_DIRECTION` override `Kore`, `1.0`, and `Warm and restrained.`. Run `npm run evaluate:gemini-continuity -- --dry-run` to inspect requests without credentials, network calls, or output files. For live listening, check consecutive segments for spoken directions, duplicated or missing text, and delivery consistency; repeat with different speeds to assess pacing. Automated request tests do not establish audible quality.
 
 Unit tests use credential-free browser mocks. Playwright covers every provider at desktop and mobile sizes, mocked WebSocket narration, horizontal overflow, and committed visual-regression baselines. No provider credentials are required.
 
@@ -119,9 +119,11 @@ If your OAuth consent screen is in testing mode, add your Google account as a te
 
 ## Provider Notes
 
-OpenRouter uses `https://openrouter.ai/api/v1/audio/speech` for speech generation and `https://openrouter.ai/api/v1/models?output_modalities=speech` for model discovery. Every discovered model uses the built-in voice selection and speech-generation flow. The exact `google/gemini-3.1-flash-tts-preview` model additionally uses multilingual semantic segmentation, stable audiobook direction, and optional silent context from adjacent segments. The app checks `https://openrouter.ai/api/v1/key` for the selected key's remaining credit limit; keys without a configured limit do not expose an account balance through that endpoint.
+OpenRouter uses `https://openrouter.ai/api/v1/audio/speech` for speech generation and `https://openrouter.ai/api/v1/models?output_modalities=speech` for model discovery. Every discovered model uses the built-in voice selection and speech-generation flow. The exact `google/gemini-3.1-flash-tts-preview`, `google/gemini-3.8-flash-tts`, and `google/gemini-3.8-flash-lite-tts` models additionally use multilingual semantic segmentation and repeated audiobook direction. Only 3.1 supports the app's silent neighboring-context mechanism. Unknown models do not inherit a Gemini prompt format from their audio encoding. The app checks `https://openrouter.ai/api/v1/key` for the selected key's remaining credit limit; keys without a configured limit do not expose an account balance through that endpoint.
 
-OpenRouter Gemini 3.1 defaults to a 500-character semantic target (the **Very short** setting) and a 2,500-character hard maximum. These are targets rather than fixed cuts: the segmenter preserves sentence separators, prefers paragraph and chapter boundaries, attaches short headings to following prose, and rebalances short tails. Compact silent context from the previous and following segments is enabled by default; each direction can be disabled independently under **Gemini continuity** when neighboring content causes a request to be rejected. An optional narrator direction is repeated consistently across requests and stored only for the browser session.
+The supported OpenRouter Gemini 3.1 and 3.8 TTS models default to a 500-character semantic target (the **Very short** setting) and a 2,500-character hard maximum. These are targets rather than fixed cuts: the segmenter preserves sentence separators, prefers paragraph and chapter boundaries, attaches short headings to following prose, and rebalances short tails. On 3.1, compact silent context from the previous and following segments is enabled by default; each direction can be disabled independently under **Gemini continuity** when neighboring content causes a request to be rejected. An optional narrator direction is repeated consistently across requests and stored only for the browser session.
+
+Gemini 3.8 reads the request `input` verbatim, so bigTTS sends only the cleaned passage there. Narrator direction, pace, and a concise delivery baseline are sent separately through OpenRouter's `instructions` field. **Gemini continuity** is labeled **Style-based**: the same delivery settings repeat across requests, without audio history or neighboring excerpts. Both context switches are disabled and unchecked for 3.8; saved context preferences remain intact when switching back to 3.1. Narrator direction is shared and remembered for the browser session.
 
 When an OpenRouter Gemini segment remains rejected after the automatic retry, **Smart retry** splits it near sentence, clause, or word boundaries and submits each piece sequentially with both context directions disabled. Only rejected pieces get smaller; successful pieces stay buffered until the original segment is resolved, then arrive together in the original order. Voice, model, pace, and narrator direction stay the same. A word that still fails individually is automatically omitted, with the missing text listed in the output and omissions indicated at completion.
 
@@ -129,7 +131,7 @@ Each manual Smart retry click allows 64 piece synthesis attempts (bounded transi
 
 Enable **Auto smart retry** in Voice & synthesis before starting an OpenRouter Gemini narration for unattended recovery. It defaults off and remembers your choice for the browser session. After the normal automatic retry fails with a text rejection, it starts Smart retry and automatically continues through successive 64-attempt batches until the segment is resolved, then proceeds with narration. Individual rejected words are still omitted and listed. Operational failures still return to recovery controls, and Pause and Stop remain available. The switch is locked while narration is active; other providers are unaffected.
 
-Gemini 3.1 pace is expressed in the director prompt because OpenRouter's generic `speed` field is not supported by every TTS provider. The model returns 24 kHz, 16-bit mono PCM. Successful responses are validated without filtering or normalizing the audio; transient preview-model failures are retried up to twice, with both neighboring-context directions removed on retries. The generation ID is retained in narration diagnostics. Waveform crossfading and a Web Audio playback scheduler remain intentionally out of scope, so this release improves tonal and prosodic continuity rather than mechanically editing boundaries.
+Gemini 3.1 pace is expressed in the director prompt; 3.8 pace is expressed in `instructions`. These models do not receive OpenRouter's generic `speed` field. The app explicitly requests 24 kHz, 16-bit mono PCM, validates the response, and extracts PCM if a compatible WAV container is returned. Transient transport failures are retried up to twice; the automatic segment retry removes both neighboring-context directions on 3.1. Model, voice, pace, and narrator direction remain consistent through retries. The generation ID is retained in narration diagnostics. Waveform crossfading and a Web Audio playback scheduler remain intentionally out of scope, so this release improves tonal and prosodic continuity rather than mechanically editing boundaries.
 
 Select **Google: Gemini 3.1 Flash TTS**, then choose **API key** or **OAuth** under **Access method**. The app remembers the method for the browser session and keeps your selected voice when switching methods. Existing saved Google/Gemini selections and API keys remain compatible.
 
@@ -159,7 +161,7 @@ MiniMax's voice-management documentation adds an important caveat: **unused clon
 
 Both integrations check provider-level failures as well as HTTP failures. MiniMax uploads also check `base_resp`; provider codes and trace IDs are retained when supplied. MiniMax audio must match the requested hex encoding, and requests combine cancellation with timeouts. Existing stored settings and voice IDs remain compatible; missing new settings use the defaults above.
 
-The direct Gemini API and Google Cloud TTS routes retain their existing 500-character defaults. Cloud Gemini-TTS has a 4,000-byte text-field limit per request, so the backend applies a stricter Google segment cap and checks UTF-8 byte length when splitting text. The continuity behavior described above applies only to Gemini 3.1 through OpenRouter.
+The direct Gemini API and Google Cloud TTS routes retain their existing 500-character defaults. Cloud Gemini-TTS has a 4,000-byte text-field limit per request, so the backend applies a stricter Google segment cap and checks UTF-8 byte length when splitting text. The continuity behavior described above applies only to the supported Gemini 3.1 and 3.8 TTS models through OpenRouter.
 
 Sources:
 

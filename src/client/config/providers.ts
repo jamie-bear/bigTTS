@@ -2,7 +2,8 @@ import type { ProviderConfig, ProviderId, SelectOption } from "../types/contract
 import { MINIMAX_LANGUAGES as minimaxLanguages, MINIMAX_MAX_CHARS, RESEMBLE_MAX_CHARS } from "../../shared/speechSettings.js";
 export { MINIMAX_MODELS } from "../../shared/speechSettings.js";
 
-export const OPENROUTER_GEMINI_31_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
+import { getOpenRouterGeminiCapabilities } from "../../shared/geminiModels.js";
+export { OPENROUTER_GEMINI_31_TTS_MODEL, isOpenRouterGemini31Model, getOpenRouterGeminiCapabilities } from "../../shared/geminiModels.js";
 
 export const GEMINI_VOICE_GENDERS: Record<string, "female" | "male"> = {
   Achernar: "female", Achird: "male", Algenib: "male", Algieba: "male", Alnilam: "male",
@@ -96,7 +97,6 @@ export const SEGMENT_OPTIONS = optionList([["500", "Very short"], ["1200", "Shor
 
 export const isProviderId = (value: string | null): value is ProviderId => Boolean(value && value in PROVIDERS);
 export const isOpenRouterPcmModel = (modelId: string) => /(^|[/:-])(?:google|gemini)(?:[/:-]|$)/i.test(modelId);
-export const isOpenRouterGemini31Model = (modelId: string) => modelId.trim().toLowerCase() === OPENROUTER_GEMINI_31_TTS_MODEL;
 export const isOpenRouterGeminiModel = (modelId: string) => /(^|[/:-])gemini(?:[/:-]|$)/i.test(modelId);
 
 export function sortVoiceOptions(options: SelectOption[]) {
@@ -121,7 +121,8 @@ export function knownModelVoiceGender(modelId: string, voice: string) {
 
 export function activeSegmentLimits(provider: ProviderId, model: string) {
   const config = PROVIDERS[provider];
-  return provider === "openrouter" && isOpenRouterGemini31Model(model)
-    ? { defaultSegmentChars: 500, maxSegmentChars: 2500 }
+  const gemini = provider === "openrouter" ? getOpenRouterGeminiCapabilities(model) : undefined;
+  return gemini?.semanticSegmentation
+    ? { defaultSegmentChars: gemini.defaultSegmentChars, maxSegmentChars: gemini.maxSegmentChars }
     : { defaultSegmentChars: config.defaultSegmentChars, maxSegmentChars: config.maxSegmentChars };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode, type RefObject } from "react";
-import { isOpenRouterGemini31Model, isOpenRouterGeminiModel, isOpenRouterPcmModel, MINIMAX_LANGUAGES, SEGMENT_OPTIONS } from "../config/providers";
+import { getOpenRouterGeminiCapabilities, isOpenRouterGeminiModel, isOpenRouterPcmModel, MINIMAX_LANGUAGES, SEGMENT_OPTIONS } from "../config/providers";
 import type { useBigTtsController } from "../hooks/useBigTtsController";
 import { AudioPlayer } from "./AudioPlayer";
 import { ProviderSetup } from "./ProviderSetup";
@@ -16,7 +16,9 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
   const lowLatencyAvailable = Boolean(providerConfig.supportsLowLatency);
   const textNormalizationAvailable = Boolean(providerConfig.supportsTextNormalization);
   const unavailableCapabilityCount = Number(!lowLatencyAvailable) + Number(!textNormalizationAvailable);
-  const gemini31OpenRouter = state.provider === "openrouter" && isOpenRouterGemini31Model(state.openrouterModel);
+  const geminiCapabilities = state.provider === "openrouter" ? getOpenRouterGeminiCapabilities(state.openrouterModel) : undefined;
+  const geminiNarration = Boolean(geminiCapabilities?.narratorDirection);
+  const neighboringContext = Boolean(geminiCapabilities?.neighboringContext);
   const geminiOpenRouter = state.provider === "openrouter" && isOpenRouterGeminiModel(state.openrouterModel);
   const sessionActive = ["connecting", "generating", "pausing", "paused", "recoverable"].includes(state.phase);
   const geminiContextMeta = state.geminiPreviousContext && state.geminiFollowingContext
@@ -47,7 +49,7 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
           <small id="voiceIdOverrideHelp" className="field-help">Overrides the selected voice. Clear this field to use the dropdown.</small>
         </div>}
         {state.provider === "minimax" && <MiniMaxVoiceManager controller={controller} />}
-        <div className="field-grid">{state.provider !== "resemble" && <SelectField id="language" label="Language" options={providerConfig.languages.map((option) => ({ ...option, disabled: state.provider === "minimax" && !minimaxLanguageSupported(option.value, state.minimaxModel) }))} value={state.language} onChange={(event) => actions.setLanguage(event.target.value)} />}<SelectField id="segmentChars" label={gemini31OpenRouter ? "Segment target" : "Segment size"} options={SEGMENT_OPTIONS.map((option) => ({ ...option, disabled: Number(option.value) > limits.maxSegmentChars }))} value={state.segmentChars} onChange={(event) => actions.setSegmentChars(Number(event.target.value))} helper={gemini31OpenRouter || state.provider === "resemble" ? `${state.segmentChars.toLocaleString()}-character target${state.provider === "resemble" ? "; requests capped at 3,000 including delivery settings" : ""}` : `${state.segmentChars.toLocaleString()} characters per request`} /></div>
+        <div className="field-grid">{state.provider !== "resemble" && <SelectField id="language" label="Language" options={providerConfig.languages.map((option) => ({ ...option, disabled: state.provider === "minimax" && !minimaxLanguageSupported(option.value, state.minimaxModel) }))} value={state.language} onChange={(event) => actions.setLanguage(event.target.value)} />}<SelectField id="segmentChars" label={geminiNarration ? "Segment target" : "Segment size"} options={SEGMENT_OPTIONS.map((option) => ({ ...option, disabled: Number(option.value) > limits.maxSegmentChars }))} value={state.segmentChars} onChange={(event) => actions.setSegmentChars(Number(event.target.value))} helper={geminiNarration || state.provider === "resemble" ? `${state.segmentChars.toLocaleString()}-character target${state.provider === "resemble" ? "; requests capped at 3,000 including delivery settings" : ""}` : `${state.segmentChars.toLocaleString()} characters per request`} /></div>
         {state.provider !== "resemble" && <Slider
           id="speed"
           label="Reading speed"
@@ -61,7 +63,7 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
           badge={providerConfig.supportsSpeed ? undefined : "Unavailable"}
           onChange={(event) => actions.setSpeed(Number(event.target.value))}
           helper={<>
-            {gemini31OpenRouter && <small>Gemini follows this as a narration direction; audio is not mechanically time-stretched.</small>}
+            {geminiNarration && <small>Gemini follows this as a narration direction; audio is not mechanically time-stretched.</small>}
             {!providerConfig.supportsSpeed && <small>This provider does not accept a reading-speed setting.</small>}
           </>}
         />}
@@ -70,10 +72,10 @@ export function SettingsPanel({ controller }: { controller: Controller }) {
           <Switch id="autoSmartRetry" label="Auto smart retry" checked={state.autoSmartRetry} disabled={sessionActive} onChange={(event) => actions.setAutoSmartRetry(event.target.checked)} />
           <small className="field-help">Automatically split rejected text and continue without prompts. Words that still fail are skipped and listed. Choose before starting narration; remembered for this browser session.</small>
         </div>}
-        {gemini31OpenRouter && <Disclosure className="gemini-continuity-panel" summary="Gemini continuity" meta={geminiContextMeta} bodyClassName="gemini-continuity-settings">
-          <Switch id="geminiPreviousContext" label="Send previous segment context" checked={state.geminiPreviousContext} onChange={(event) => actions.setGeminiPreviousContext(event.target.checked)} />
-          <Switch id="geminiFollowingContext" label="Send following segment context" checked={state.geminiFollowingContext} onChange={(event) => actions.setGeminiFollowingContext(event.target.checked)} />
-          <small>Each enabled direction sends a compact, silent excerpt to help sustain delivery. Disable either direction if neighboring text causes Gemini to reject a segment.</small>
+        {geminiNarration && <Disclosure className="gemini-continuity-panel" summary="Gemini continuity" meta={neighboringContext ? geminiContextMeta : "Style-based"} bodyClassName="gemini-continuity-settings">
+          <Switch id="geminiPreviousContext" label="Send previous segment context" disabled={!neighboringContext} checked={neighboringContext && state.geminiPreviousContext} onChange={(event) => actions.setGeminiPreviousContext(event.target.checked)} />
+          <Switch id="geminiFollowingContext" label="Send following segment context" disabled={!neighboringContext} checked={neighboringContext && state.geminiFollowingContext} onChange={(event) => actions.setGeminiFollowingContext(event.target.checked)} />
+          <small>{neighboringContext ? "Each enabled direction sends a compact, silent excerpt to help sustain delivery. Disable either direction if neighboring text causes Gemini to reject a segment." : "Gemini 3.8 repeats delivery settings for style-based continuity. Neighboring excerpts are unsupported by this integration; audio history is not carried between requests."}</small>
           <label htmlFor="geminiNarratorDirection"><span>Narrator direction <em>Optional</em></span><textarea className="gemini-direction" id="geminiNarratorDirection" maxLength={800} value={state.geminiNarratorDirection} onChange={(event) => actions.setGeminiNarratorDirection(event.target.value)} placeholder="For example: Warm, intimate literary narration with restrained emotion." /></label>
           <small>Keep this compatible with the selected voice. The same direction is repeated for every segment. {state.geminiNarratorDirection.length}/800</small>
         </Disclosure>}

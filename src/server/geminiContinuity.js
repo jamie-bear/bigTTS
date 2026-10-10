@@ -1,18 +1,15 @@
 import { requestOpenRouterSpeech } from "./openRouterSpeech.js";
+import { OPENROUTER_GEMINI_31_TTS_MODEL, GEMINI_DEFAULT_SEGMENT_CHARS, GEMINI_MAX_SEGMENT_CHARS, getOpenRouterGeminiCapabilities } from "../shared/geminiModels.js";
+export { OPENROUTER_GEMINI_31_TTS_MODEL, isOpenRouterGemini31Model } from "../shared/geminiModels.js";
 
-export const OPENROUTER_GEMINI_31_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
-export const GEMINI_31_DEFAULT_SEGMENT_CHARS = 500;
-export const GEMINI_31_MAX_SEGMENT_CHARS = 2_500;
+export const GEMINI_31_DEFAULT_SEGMENT_CHARS = GEMINI_DEFAULT_SEGMENT_CHARS;
+export const GEMINI_31_MAX_SEGMENT_CHARS = GEMINI_MAX_SEGMENT_CHARS;
 export const GEMINI_31_CONTEXT_CHARS = 240;
 export const GEMINI_31_MAX_DIRECTION_CHARS = 800;
 
 const STRONG_BOUNDARIES = new Set(["chapter", "scene"]);
 const CLAUSE_END = /[;:,؛،、，；：—–]/u;
 const SENTENCE_END = /[.!?؟۔।。！？]/u;
-
-export function isOpenRouterGemini31Model(model) {
-  return String(model || "").trim().toLowerCase() === OPENROUTER_GEMINI_31_TTS_MODEL;
-}
 
 export function sanitizeNarratorDirection(value) {
   return String(value || "")
@@ -186,6 +183,28 @@ export function prepareGeminiTranscript(value) {
 }
 
 export async function requestOpenRouterGemini31Speech(options) {
+  return requestOpenRouterGeminiSpeech({ ...options, model: OPENROUTER_GEMINI_31_TTS_MODEL });
+}
+
+export function buildGeminiSpeechBody(segment, options) {
+  const capabilities = getOpenRouterGeminiCapabilities(options.model);
+  if (!capabilities) throw new Error(`Unsupported Gemini narration model: ${options.model}`);
+  const direction = sanitizeNarratorDirection(options.narratorDirection);
+  return {
+    model: options.model,
+    voice: options.voice,
+    response_format: "pcm",
+    ...(capabilities.promptFormat === "legacy"
+      ? { input: buildGemini31NarrationPrompt(segment, options) }
+      : {
+        input: prepareGeminiTranscript(segment.text),
+        instructions: `Natural audiobook delivery with restrained expression and consistent pacing and loudness. Pacing: ${geminiPaceDirective(options.speed)}.${direction ? ` ${direction}` : ""}`
+      })
+  };
+}
+
+export async function requestOpenRouterGeminiSpeech(options) {
+  if (!getOpenRouterGeminiCapabilities(options.model)) throw new Error(`Unsupported Gemini narration model: ${options.model}`);
   return requestOpenRouterSpeech({
     url: options.url,
     apiKey: options.apiKey,
@@ -197,8 +216,9 @@ export async function requestOpenRouterGemini31Speech(options) {
     maxAttempts: options.maxAttempts,
     onRetry: options.onRetry,
     body: {
-      model: OPENROUTER_GEMINI_31_TTS_MODEL,
+      model: options.model,
       input: options.input,
+      ...(options.instructions !== undefined ? { instructions: options.instructions } : {}),
       voice: options.voice,
       response_format: "pcm"
     },
@@ -442,18 +462,34 @@ function clampInteger(value, minimum, maximum, fallback) {
 }
 
 function extractPcmBytes(audio) {
-  if (audio.byteLength < 44 || ascii(audio, 0, 4) !== "RIFF" || ascii(audio, 8, 12) !== "WAVE") return audio;
+  if (ascii(audio, 0, 4) !== "RIFF") return audio;
+  if (audio.byteLength < 44 || ascii(audio, 8, 12) !== "WAVE") throw new Error("OpenRouter Gemini TTS returned an invalid WAV header.");
   const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
+  const end = view.getUint32(4, true) + 8;
+  if (end > audio.byteLength || end < 44) throw new Error("OpenRouter Gemini TTS returned a truncated WAV payload.");
   let offset = 12;
-  while (offset + 8 <= audio.byteLength) {
+  let validFormat = false;
+  let pcm;
+  while (offset + 8 <= end) {
     const chunkId = ascii(audio, offset, offset + 4);
     const chunkSize = view.getUint32(offset + 4, true);
     const dataStart = offset + 8;
-    const dataEnd = Math.min(dataStart + chunkSize, audio.byteLength);
-    if (chunkId === "data") return audio.slice(dataStart, dataEnd);
+    const dataEnd = dataStart + chunkSize;
+    if (dataEnd + (chunkSize % 2) > end) throw new Error("OpenRouter Gemini TTS returned a truncated WAV chunk.");
+    if (chunkId === "fmt ") {
+      if (chunkSize < 16 || view.getUint16(dataStart, true) !== 1
+        || view.getUint16(dataStart + 2, true) !== 1 || view.getUint32(dataStart + 4, true) !== 24_000
+        || view.getUint32(dataStart + 8, true) !== 48_000 || view.getUint16(dataStart + 12, true) !== 2
+        || view.getUint16(dataStart + 14, true) !== 16) {
+        throw new Error("OpenRouter Gemini TTS requires 24 kHz, 16-bit mono PCM WAV audio.");
+      }
+      validFormat = true;
+    }
+    if (chunkId === "data") pcm = audio.slice(dataStart, dataEnd);
     offset = dataStart + chunkSize + (chunkSize % 2);
   }
-  return audio.slice(44);
+  if (!validFormat || !pcm || offset !== end) throw new Error("OpenRouter Gemini TTS returned an invalid WAV payload.");
+  return pcm;
 }
 
 function ascii(bytes, start, end) {

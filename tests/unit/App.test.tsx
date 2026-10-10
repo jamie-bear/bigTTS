@@ -217,7 +217,7 @@ describe("bigTTS application shell", () => {
     expect(screen.queryByText("Balance unavailable")).not.toBeInTheDocument();
   });
 
-  it("shows and persists advanced continuity controls for OpenRouter Gemini 3.1 only", async () => {
+  it("shows and persists advanced continuity controls for OpenRouter Gemini 3.1", async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("google-oauth/status")) return new Response(JSON.stringify({ configured: false, connected: false }), { status: 200 });
@@ -240,6 +240,38 @@ describe("bigTTS application shell", () => {
     expect(sessionStorage.getItem("openrouterGeminiPreviousContext")).toBe("false");
     expect(sessionStorage.getItem("openrouterGeminiFollowingContext")).toBe("false");
     expect(sessionStorage.getItem("openrouterGeminiNarratorDirection")).toBe("Warm and restrained.");
+  });
+
+  it.each(["google/gemini-3.8-flash-tts", "google/gemini-3.8-flash-lite-tts"])("preserves saved 3.1 settings while using style continuity for %s", async (model) => {
+    const legacy = "google/gemini-3.1-flash-tts-preview";
+    sessionStorage.setItem("openrouterGeminiPreviousContext", "true");
+    sessionStorage.setItem("openrouterGeminiFollowingContext", "false");
+    sessionStorage.setItem("openrouterGeminiNarratorDirection", "Warm and restrained.");
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes("openrouter/models")) return new Response(JSON.stringify({ models: [legacy, model].map((id) => ({ id, name: id, voices: [{ value: "Kore", label: "Kore" }] })) }));
+      return new Response(JSON.stringify({ configured: false, connected: false, available: false }));
+    });
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("OpenRouter API key"), { target: { value: "test-key" } });
+    await waitFor(() => expect(screen.getByLabelText("OpenRouter model")).toHaveValue(legacy));
+    fireEvent.change(screen.getByLabelText("OpenRouter model"), { target: { value: model } });
+    expect(screen.getByText("Style-based")).toBeInTheDocument();
+    expect(screen.getByLabelText("Segment target")).toHaveValue("500");
+    expect(screen.getByRole("option", { name: "Long" })).toBeDisabled();
+    for (const direction of ["previous", "following"]) {
+      expect(screen.getByLabelText(`Send ${direction} segment context`)).toBeDisabled();
+      expect(screen.getByLabelText(`Send ${direction} segment context`)).not.toBeChecked();
+    }
+    expect(screen.getByLabelText(/Narrator direction/)).toHaveValue("Warm and restrained.");
+    fireEvent.change(screen.getByLabelText(/Narrator direction/), { target: { value: "Quiet storytelling." } });
+    expect(sessionStorage.getItem("openrouterGeminiPreviousContext")).toBe("true");
+    expect(sessionStorage.getItem("openrouterGeminiFollowingContext")).toBe("false");
+    expect(sessionStorage.getItem("openrouterGeminiNarratorDirection")).toBe("Quiet storytelling.");
+    fireEvent.change(screen.getByLabelText("OpenRouter model"), { target: { value: legacy } });
+    expect(screen.getByLabelText("Send previous segment context")).toBeEnabled();
+    expect(screen.getByLabelText("Send previous segment context")).toBeChecked();
+    expect(screen.getByLabelText("Send following segment context")).not.toBeChecked();
+    expect(screen.getByLabelText(/Narrator direction/)).toHaveValue("Quiet storytelling.");
   });
 
   it("migrates a disabled legacy Gemini continuity preference to both context switches", async () => {

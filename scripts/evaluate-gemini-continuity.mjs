@@ -1,16 +1,24 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import {
-  buildGemini31NarrationPrompt,
+  buildGeminiSpeechBody,
   createGeminiNarrationSegments,
-  requestOpenRouterGemini31Speech
+  requestOpenRouterGeminiSpeech
 } from "../src/server/geminiContinuity.js";
 
+import { getOpenRouterGeminiCapabilities, OPENROUTER_GEMINI_31_TTS_MODEL } from "../src/shared/geminiModels.js";
+
+const model = String(process.env.GEMINI_TTS_MODEL || OPENROUTER_GEMINI_31_TTS_MODEL).trim();
+const capabilities = getOpenRouterGeminiCapabilities(model);
+if (!capabilities) throw new Error(`Unsupported evaluation model: ${model}`);
+const narratorDirection = String(process.env.GEMINI_TTS_DIRECTION || "Warm and restrained.");
+const dryRun = process.argv.includes("--dry-run");
 const apiKey = String(process.env.OPENROUTER_API_KEY || "").trim();
-if (!apiKey) throw new Error("Set OPENROUTER_API_KEY before running the Gemini continuity evaluation.");
+if (!apiKey && !dryRun) throw new Error("Set OPENROUTER_API_KEY before running the Gemini continuity evaluation.");
 
 const voice = String(process.env.GEMINI_TTS_VOICE || "Kore").trim() || "Kore";
 const speed = Number(process.env.GEMINI_TTS_SPEED || 1);
+if (!Number.isFinite(speed) || speed < 0.7 || speed > 1.5) throw new Error("GEMINI_TTS_SPEED must be between 0.7 and 1.5.");
 const outputRoot = path.resolve("artifacts", "gemini-continuity", new Date().toISOString().replace(/[:.]/g, "-"));
 const samples = [
   {
@@ -35,29 +43,35 @@ const samples = [
   }
 ];
 
-await fs.mkdir(outputRoot, { recursive: true });
+if (!dryRun) await fs.mkdir(outputRoot, { recursive: true });
 const manifest = {
   createdAt: new Date().toISOString(),
-  model: "google/gemini-3.1-flash-tts-preview",
+  model,
+  narratorDirection,
   voice,
   speed,
-  note: "Blind-listen to each baseline/optimized pair. Generated files are ignored by git.",
+  note: "Listen for spoken directions, duplicate or missing text, pacing response, and consistency across adjacent segments. For 3.8 compare plain/styled pairs; repeat at different GEMINI_TTS_SPEED values to assess pacing. Generated files are ignored by git.",
   samples: []
 };
 
 for (const sample of samples) {
-  const variants = [
+  const productionBody = (segment) => buildGeminiSpeechBody(segment, { model, voice, speed, narratorDirection, enhancedContinuity: true });
+  const semanticSegments = createGeminiNarrationSegments(sample.text, { targetChars: capabilities.defaultSegmentChars });
+  const variants = capabilities.promptFormat === "instructions" ? [
+    { name: "plain", segments: semanticSegments, body: (segment) => ({ ...productionBody(segment), instructions: "" }) },
+    { name: "styled", segments: semanticSegments, body: productionBody }
+  ] : [
     {
       name: "baseline",
       segments: legacySegments(sample.text, 500).map((text, index, list) => ({
         text, previousContext: "", nextContext: "", boundaryBefore: index ? "sentence" : "start", boundaryAfter: index === list.length - 1 ? "end" : "sentence"
       })),
-      prompt: (segment) => `Read the following audiobook passage aloud exactly as written.\n\n${segment.text}`
+      body: (segment) => ({ model, voice, response_format: "pcm", input: `Read the following audiobook passage aloud exactly as written.\n\n${segment.text}` })
     },
     {
       name: "optimized",
       segments: createGeminiNarrationSegments(sample.text, { targetChars: 1_200 }),
-      prompt: (segment) => buildGemini31NarrationPrompt(segment, { speed, enhancedContinuity: true })
+      body: productionBody
     }
   ];
   const sampleManifest = { id: sample.id, sourceChars: sample.text.length, variants: [] };
@@ -67,11 +81,15 @@ for (const sample of samples) {
     const segmentManifest = [];
     for (const [index, segment] of variant.segments.entries()) {
       process.stdout.write(`${sample.id} ${variant.name} ${index + 1}/${variant.segments.length}\n`);
-      const result = await requestOpenRouterGemini31Speech({
+      const body = variant.body(segment);
+      if (dryRun) {
+        process.stdout.write(`${JSON.stringify(body)}\n`);
+        continue;
+      }
+      const result = await requestOpenRouterGeminiSpeech({
         url: "https://openrouter.ai/api/v1/audio/speech",
         apiKey,
-        voice,
-        input: variant.prompt(segment)
+        ...body
       });
       audioParts.push(result.audio);
       segmentManifest.push({
@@ -81,18 +99,22 @@ for (const sample of samples) {
         boundaryAfter: segment.boundaryAfter,
         generationId: result.generationId,
         attempts: result.attempts,
-        text: segment.text
+        text: segment.text,
+        input: body.input,
+        instructions: body.instructions
       });
     }
     const filename = `${sample.id}-${variant.name}.wav`;
-    await fs.writeFile(path.join(outputRoot, filename), createWav(audioParts));
+    if (!dryRun) await fs.writeFile(path.join(outputRoot, filename), createWav(audioParts));
     sampleManifest.variants.push({ name: variant.name, filename, segments: segmentManifest });
   }
   manifest.samples.push(sampleManifest);
 }
 
-await fs.writeFile(path.join(outputRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-process.stdout.write(`Evaluation written to ${outputRoot}\n`);
+if (!dryRun) {
+  await fs.writeFile(path.join(outputRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  process.stdout.write(`Evaluation written to ${outputRoot}\n`);
+}
 
 function legacySegments(text, targetLength) {
   const paragraphs = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);

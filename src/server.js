@@ -6,15 +6,13 @@ import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync, promises as fs } from "node:fs";
 import {
-  GEMINI_31_DEFAULT_SEGMENT_CHARS,
-  GEMINI_31_MAX_SEGMENT_CHARS,
-  buildGemini31NarrationPrompt,
+  buildGeminiSpeechBody,
   createGeminiNarrationSegments,
-  isOpenRouterGemini31Model,
-  requestOpenRouterGemini31Speech,
+  requestOpenRouterGeminiSpeech,
   prepareGeminiTranscript,
   sanitizeNarratorDirection
 } from "./server/geminiContinuity.js";
+import { getOpenRouterGeminiCapabilities } from "./shared/geminiModels.js";
 import { openRouterErrorDetails, requestOpenRouterSpeech } from "./server/openRouterSpeech.js";
 import { createSmartRetry, runSmartRetry, isOpenRouterGemini, isTextRejection } from "./server/smartRetry.js";
 import { MINIMAX_MODELS, MINIMAX_LANGUAGES, MINIMAX_MAX_CHARS, RESEMBLE_MAX_CHARS, minimaxLanguageSupported, normalizeMinimaxSettings, normalizeResembleSettings, normalizeCloneSettings } from "./shared/speechSettings.js";
@@ -1090,7 +1088,7 @@ export function createNarrationSession(client) {
     state.segmentIndex = 0;
     state.automaticSegmentRetries = 0;
     state.waitingForAudioDone = false;
-    state.segments = options.provider === "openrouter" && isOpenRouterGemini31Model(options.model)
+    state.segments = options.provider === "openrouter" && getOpenRouterGeminiCapabilities(options.model)?.semanticSegmentation
       ? createGeminiNarrationSegments(text, { targetChars: options.segmentChars })
       : splitText(text, options.segmentChars, options.maxSegmentBytes)
         .flatMap((segment) => options.provider === "resemble" ? splitResembleText(segment, options.segmentChars, options.resemble) : [segment])
@@ -1261,7 +1259,7 @@ export function createNarrationSession(client) {
     const segment = state.segments[state.segmentIndex];
     const index = state.segmentIndex + 1;
     const generation = state.generation;
-    state.smartRetry ||= createSmartRetry(isOpenRouterGemini31Model(state.options.model) ? prepareGeminiTranscript(segment.text) : segment.text);
+    state.smartRetry ||= createSmartRetry(getOpenRouterGeminiCapabilities(state.options.model)?.semanticSegmentation ? prepareGeminiTranscript(segment.text) : segment.text);
     const checkpoint = state.smartRetry;
     const controller = new AbortController();
     state.currentRequest = controller;
@@ -1337,7 +1335,7 @@ export function createNarrationSession(client) {
     }
 
     if (state.options.provider === "openrouter") {
-      const retryOptions = state.automaticSegmentRetries > 0 && isOpenRouterGemini31Model(state.options.model)
+      const retryOptions = state.automaticSegmentRetries > 0 && getOpenRouterGeminiCapabilities(state.options.model)?.neighboringContext
         ? { ...state.options, geminiPreviousContext: false, geminiFollowingContext: false }
         : state.options;
       await synthesizeBufferedSegment((signal) => synthesizeOpenRouterSpeech(segment, retryOptions, state.apiKey, signal));
@@ -1558,7 +1556,7 @@ export function sanitizeOptions(raw) {
   if (provider === "minimax" && !minimaxLanguageSupported(language, model)) throw new Error(`Language ${language} is not supported by ${model}.`);
   const minimax = provider === "minimax" ? normalizeMinimaxSettings(raw.minimax, model) : undefined;
   const resemble = provider === "resemble" ? normalizeResembleSettings(raw.resemble) : undefined;
-  const gemini31OpenRouter = provider === "openrouter" && isOpenRouterGemini31Model(model);
+  const geminiCapabilities = provider === "openrouter" ? getOpenRouterGeminiCapabilities(model) : undefined;
   const legacyGeminiContinuity = raw.geminiContinuity !== false;
   const defaultSegmentChars = getDefaultSegmentChars(provider, model);
   const maxSegmentChars = getMaxSegmentChars(provider, model);
@@ -1587,11 +1585,11 @@ export function sanitizeOptions(raw) {
     optimizeStreamingLatency,
     textNormalization,
     autoSmartRetry: isOpenRouterGemini({ provider, model }) && raw.autoSmartRetry === true,
-    geminiPreviousContext: gemini31OpenRouter
+    geminiPreviousContext: Boolean(geminiCapabilities?.neighboringContext)
       && (raw.geminiPreviousContext === undefined ? legacyGeminiContinuity : raw.geminiPreviousContext !== false),
-    geminiFollowingContext: gemini31OpenRouter
+    geminiFollowingContext: Boolean(geminiCapabilities?.neighboringContext)
       && (raw.geminiFollowingContext === undefined ? legacyGeminiContinuity : raw.geminiFollowingContext !== false),
-    geminiNarratorDirection: gemini31OpenRouter ? sanitizeNarratorDirection(raw.geminiNarratorDirection) : ""
+    geminiNarratorDirection: geminiCapabilities?.narratorDirection ? sanitizeNarratorDirection(raw.geminiNarratorDirection) : ""
   };
 }
 
@@ -1606,7 +1604,7 @@ function sanitizeBase64Audio(value, maxLength = 6 * 1024 * 1024) {
 function getDefaultSegmentChars(provider, model = "") {
   if (provider === "google") return GOOGLE_DEFAULT_SEGMENT_CHARS;
   if (provider === "gemini") return GEMINI_DEFAULT_SEGMENT_CHARS;
-  if (provider === "openrouter" && isOpenRouterGemini31Model(model)) return GEMINI_31_DEFAULT_SEGMENT_CHARS;
+  if (provider === "openrouter") return getOpenRouterGeminiCapabilities(model)?.defaultSegmentChars ?? DEFAULT_SEGMENT_CHARS;
   return DEFAULT_SEGMENT_CHARS;
 }
 
@@ -1614,7 +1612,7 @@ function getMaxSegmentChars(provider, model = "") {
   if (provider === "minimax") return MINIMAX_MAX_CHARS;
   if (provider === "resemble") return RESEMBLE_MAX_CHARS;
   if (provider === "google") return GOOGLE_MAX_SEGMENT_CHARS;
-  if (provider === "openrouter" && isOpenRouterGemini31Model(model)) return GEMINI_31_MAX_SEGMENT_CHARS;
+  if (provider === "openrouter") return getOpenRouterGeminiCapabilities(model)?.maxSegmentChars ?? MAX_SEGMENT_CHARS;
   return MAX_SEGMENT_CHARS;
 }
 
@@ -1780,12 +1778,13 @@ async function synthesizeOpenRouterSpeech(segment, options, apiKey, signal) {
     throw new Error("Add your OpenRouter API key before starting narration.");
   }
 
-  if (isOpenRouterGemini31Model(options.model)) {
-    const result = await requestOpenRouterGemini31Speech({
+  if (getOpenRouterGeminiCapabilities(options.model)) {
+    const result = await requestOpenRouterGeminiSpeech({
       url: OPENROUTER_TTS_URL,
       apiKey: trimmedApiKey,
-      voice: options.voice,
-      input: buildGemini31NarrationPrompt(segment, {
+      ...buildGeminiSpeechBody(segment, {
+        model: options.model,
+        voice: options.voice,
         speed: options.speed,
         includePreviousContext: options.geminiPreviousContext,
         includeFollowingContext: options.geminiFollowingContext,
@@ -1805,7 +1804,7 @@ async function synthesizeOpenRouterSpeech(segment, options, apiKey, signal) {
     apiKey: trimmedApiKey,
     body: {
       model: options.model,
-      input: requiresOpenRouterPcm(options.model) ? buildGeminiPrompt(segment.text, options) : segment.text,
+      input: segment.text,
       voice: options.voice,
       response_format: getOpenRouterResponseFormat(options.model),
       speed: options.speed

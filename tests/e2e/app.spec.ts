@@ -178,20 +178,31 @@ test("refreshes the selected provider balance after a segment completes", async 
   await expect(page.getByLabel("Provider balance")).toContainText("9.00");
 });
 
-test("configures and serializes OpenRouter Gemini 3.1 continuity", async ({ page }) => {
-  await page.route("**/api/openrouter/models", (route) => route.fulfill({ json: { models: [{ id: "google/gemini-3.1-flash-tts-preview", name: "Gemini 3.1 Flash TTS Preview", voices: [{ value: "Kore", label: "Kore" }] }] } }));
+for (const model of ["google/gemini-3.1-flash-tts-preview", "google/gemini-3.8-flash-tts", "google/gemini-3.8-flash-lite-tts"]) {
+test(`configures and serializes OpenRouter Gemini continuity: ${model}`, async ({ page }) => {
+  const legacy = model.includes("3.1");
+  await page.route("**/api/openrouter/models", (route) => route.fulfill({ json: { models: [{ id: model, name: model, voices: [{ value: "Kore", label: "Kore" }] }] } }));
   await page.getByLabel("OpenRouter API key").fill("test-key");
-  await expect(page.getByLabel("OpenRouter model")).toHaveValue("google/gemini-3.1-flash-tts-preview");
+  await expect(page.getByLabel("OpenRouter model")).toHaveValue(model);
   await expect(page.getByLabel("Segment target")).toHaveValue("500");
   await page.getByText("Gemini continuity", { exact: true }).click();
-  await expect(page.getByLabel("Send previous segment context")).toBeChecked();
-  await expect(page.getByLabel("Send following segment context")).toBeChecked();
-  await page.getByLabel("Send previous segment context").uncheck();
+  if (legacy) {
+    await expect(page.getByLabel("Send previous segment context")).toBeChecked();
+    await expect(page.getByLabel("Send following segment context")).toBeChecked();
+    await page.getByLabel("Send previous segment context").uncheck();
+  } else {
+    await expect(page.getByText("Style-based", { exact: true })).toBeVisible();
+    for (const direction of ["previous", "following"]) {
+      await expect(page.getByLabel(`Send ${direction} segment context`)).toBeDisabled();
+      await expect(page.getByLabel(`Send ${direction} segment context`)).not.toBeChecked();
+    }
+  }
   await page.getByLabel("Narrator direction").fill("Warm and restrained.");
   await page.getByLabel("Book or chapter text").fill("inspect-gemini-options");
   await page.getByRole("button", { name: "Start narration" }).click();
-  await expect(page.getByText("previous=false; following=true; direction=Warm and restrained.")).toBeVisible();
+  await expect(page.getByText(`previous=false; following=${legacy}; direction=Warm and restrained.`)).toBeVisible();
 });
+}
 
 test("makes partial stitched audio downloadable before completion and after stop", async ({ page }) => {
   await page.getByLabel("Provider", { exact: true }).selectOption("xai");
